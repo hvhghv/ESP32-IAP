@@ -95,19 +95,25 @@
  * file=128 -> 合计 240) */
 #define IAP_DHCPS_MSG_OPTIONS_OFFSET 240
 
-/* 诊断日志开关: 置 1 打印 DHCP 报文选项详情 (调试用) */
-#define IAP_DHCP_DIAG_LOG       1
-
 /*
- * 完整报文 hexdump 开关 (调试用)
+ * 诊断日志开关 (默认关闭)
  *
- * 打印整个 dhcps_msg (552 字节) 的十六进制, 用于排查:
- *   - yiaddr / siaddr / giaddr 等头部字段是否正确
- *   - 选项区之外是否有残留数据
+ * 置 1 时打印 DHCP 报文的选项详情与完整 hexdump, 输出量极大
+ * (每条报文 ~50 行), 会淹没终端。裁剪逻辑已由
+ * tools/test_dhcp_strip.py 覆盖, 日常构建请保持 0。
  *
- * 注意: 输出量大 (每条报文 ~35 行), 仅在排查时临时开启。
+ * 需要排查 DHCP 问题时, 可通过编译期定义临时开启:
+ *   idf.py -DIAP_DHCP_DIAG=1 build
  */
-#define IAP_DHCP_FULL_HEXDUMP   1
+#ifndef IAP_DHCP_DIAG
+#define IAP_DHCP_DIAG          0
+#endif
+
+/* 诊断日志: 选项区 TLV 详情 (依赖 IAP_DHCP_DIAG) */
+#define IAP_DHCP_DIAG_LOG       IAP_DHCP_DIAG
+
+/* 完整报文 hexdump: 整个 dhcps_msg (552 字节) 十六进制 (依赖 IAP_DHCP_DIAG) */
+#define IAP_DHCP_FULL_HEXDUMP   IAP_DHCP_DIAG
 
 static const char *IAP_DHCP_TAG = "iap_dhcp";
 

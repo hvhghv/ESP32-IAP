@@ -1548,9 +1548,16 @@ curl -X POST http://192.168.4.1/api/boot
 | ping 不通但能打开网页 | 部分系统禁 ICMP；以浏览器为准 |
 | 完全连不上 AP | 检查 `WIFI_ENABLE` 标志位、串口日志是否有 `WiFi AP 已就绪` |
 
-> **诊断技巧**：`main/iap_lwip_hooks.h` 中的 `IAP_DHCP_DIAG_LOG` 置 1 会打印
-> DHCP 报文的完整选项列表（裁剪前/后）。正常应看到 OFFER 后紧跟客户端的
-> REQUEST 与设备的 ACK；若只有 OFFER 循环，即为上述报文错误。
+> **诊断技巧**：DHCP 报文的详细日志（选项列表 + 完整 hexdump）**默认关闭**，
+> 因为输出量极大（每条报文约 50 行）会淹没终端。
+> 需要排查时用编译期定义临时开启：
+>
+> ```powershell
+> idf.py -DIAP_DHCP_DIAG=1 build
+> ```
+>
+> 开启后正常应看到 OFFER 后紧跟客户端的 REQUEST 与设备的 ACK；
+> 若只有 OFFER 循环，即为上述报文错误。详见 `main/iap_lwip_hooks.h`。
 
 ---
 
