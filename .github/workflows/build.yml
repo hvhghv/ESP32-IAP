@@ -147,6 +147,16 @@ jobs:
             idf.py set-target ${{ matrix.target }}
             idf.py build
 
+      # esp-idf-ci-action 在 Docker 容器内以 root 构建，生成的 build/ 目录
+      # 属主为 root。后续步骤以 runner 用户运行，写入 build/ 会触发
+      # PermissionError (如 gen_factory_cfg.py 写 _auto_iap_cfg.bin)。
+      # 这里把 build/ 属主改回当前用户。
+      - name: Fix build/ ownership (docker root -> runner)
+        run: |
+          set -e
+          sudo chown -R "$(id -u):$(id -g)" build
+          ls -ld build
+
       # 生成 IAP 烧录文件 (单一连续 1280KB，含 bootloader + 配置区 + 分区表 A + IAP)
       #
       # 布局: 0x0 bootloader / 0x8000 配置区 / 0xB000 分区表A / 0xC000 nvs / 0x10000 IAP

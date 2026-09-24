@@ -26,6 +26,7 @@ DATA_SIZE = 612
 CFG_MAGIC = 0x49415043
 CFG_VERSION = 1
 BOOT_PARAM_SIZE = 256
+OTA_SLOT_MAX = 8
 
 
 def crc32(data):
@@ -71,6 +72,20 @@ def encode_data(cfg):
     b[472] = int(cfg.get("active_slot", 0)) & 0xFF
     b[473] = int(cfg.get("ota_slot_count", 1)) & 0xFF
     b[476] = int(cfg.get("ota_gpio", 0xFF)) & 0xFF
+
+    # 槽加载地址/大小 (off 480 / 544, uint64 LE，高 32 位恒 0)
+    #
+    # 默认值与 gen_factory_cfg.py 保持一致:
+    #   槽 0 = 0x150000，大小 = 到 4MB 末尾；其余为 0
+    addrs = cfg.get("slot_addr") or [0x150000]
+    sizes = cfg.get("slot_size") or [0x400000 - 0x150000]
+    for i in range(OTA_SLOT_MAX):
+        a = int(addrs[i] if i < len(addrs) else 0) & 0xFFFFFFFF
+        s = int(sizes[i] if i < len(sizes) else 0) & 0xFFFFFFFF
+        struct.pack_into("<I", b, 480 + i * 8, a)
+        struct.pack_into("<I", b, 480 + i * 8 + 4, 0)
+        struct.pack_into("<I", b, 544 + i * 8, s)
+        struct.pack_into("<I", b, 544 + i * 8 + 4, 0)
 
     # 配置数据版本
     struct.pack_into("<H", b, 608, int(cfg.get("data_ver", 0x0003)))
