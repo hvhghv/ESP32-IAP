@@ -66,6 +66,8 @@ jobs:
       # 内置镜像数据 (esp_iap_builtin.js + assets/iap_img_*.js) 是构建产物，
       # 不在仓库中跟踪，由 build.yml 生成并上传为 artifact。
       # 跨 workflow 下载需显式指定 run-id，这里取最近一次成功的 build.yml。
+      # 注意: artifact 里也含 esp_iap_tool.html，直接解到仓库根会与
+      #       checkout 的文件冲突，因此先解到临时目录再挑选所需文件。
       - name: Fetch builtin images from latest build
         continue-on-error: true
         env:
@@ -80,8 +82,19 @@ jobs:
             exit 0
           fi
           echo "从 build.yml run $RID 下载 web-editor-builtin ..."
-          gh run download "$RID" -n web-editor-builtin -D . || {
-            echo "::warning::下载失败，页面将只能手动选择文件"; exit 0; }
+          rm -rf _builtin_tmp && mkdir -p _builtin_tmp
+          if ! gh run download "$RID" -n web-editor-builtin -D _builtin_tmp; then
+            echo "::warning::下载失败，页面将只能手动选择文件"
+            exit 0
+          fi
+          # 只取索引与分芯片数据 (忽略 artifact 中的 esp_iap_tool.html)
+          [ -f _builtin_tmp/esp_iap_builtin.js ] && \
+            cp _builtin_tmp/esp_iap_builtin.js . || true
+          if [ -d _builtin_tmp/assets ]; then
+            mkdir -p assets
+            cp _builtin_tmp/assets/iap_img_*.js assets/ 2>/dev/null || true
+          fi
+          rm -rf _builtin_tmp
           ls -lh esp_iap_builtin.js 2>/dev/null || true
           ls -lh assets/ 2>/dev/null || true
 
@@ -249,6 +262,8 @@ jobs:
 
       # 下载 build.yml 生成的内置镜像数据 (索引 + 各芯片数据)。
       # 缺失时页面仍可用「手动选择文件」模式，不影响部署。
+      # 注意: artifact 里也含 esp_iap_tool.html，直接解到仓库根会与
+      #       checkout 的文件冲突，因此先解到临时目录再挑选所需文件。
       - name: Fetch builtin images from latest build
         continue-on-error: true
         env:
@@ -263,8 +278,19 @@ jobs:
             exit 0
           fi
           echo "从 build.yml run $RID 下载 web-editor-builtin ..."
-          gh run download "$RID" -n web-editor-builtin -D . || {
-            echo "::warning::下载失败，页面将只能手动选择文件"; exit 0; }
+          rm -rf _builtin_tmp && mkdir -p _builtin_tmp
+          if ! gh run download "$RID" -n web-editor-builtin -D _builtin_tmp; then
+            echo "::warning::下载失败，页面将只能手动选择文件"
+            exit 0
+          fi
+          # 只取索引与分芯片数据 (忽略 artifact 中的 esp_iap_tool.html)
+          [ -f _builtin_tmp/esp_iap_builtin.js ] && \
+            cp _builtin_tmp/esp_iap_builtin.js . || true
+          if [ -d _builtin_tmp/assets ]; then
+            mkdir -p assets
+            cp _builtin_tmp/assets/iap_img_*.js assets/ 2>/dev/null || true
+          fi
+          rm -rf _builtin_tmp
           ls -lh esp_iap_builtin.js 2>/dev/null || true
           ls -lh assets/ 2>/dev/null || true
 
