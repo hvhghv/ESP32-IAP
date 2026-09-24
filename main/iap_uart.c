@@ -937,6 +937,15 @@ static esp_err_t xm_on_read_raw(void *user, uint8_t *buf, uint32_t offset, size_
  * ⚠️ 传输期间终端任务被 XMODEM 阻塞，无法自行读 Ctrl+C。
  *    因此在这里**顺带检测 0x03**，一旦收到就置位 s_cancel，
  *    XMODEM 主循环会在下次检查时优雅退出。
+ *
+ * 返回值约定 (与 iap_xmodem_read_fn_t 一致):
+ *   > 0  实际读取的字节数
+ *   = 0  超时 (无数据)
+ *   < 0  已取消 (检测到 Ctrl+C)
+ *
+ * 注意: 取消时**必须返回负值**而非 0 —— 若返回 0，调用方只会当作
+ *       普通超时而继续等待，导致 Ctrl+C 在握手阶段「不生效」。
+ *       即使是同批到达的 Ctrl+C + 其它字节，也以取消优先。
  */
 static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_ms)
 {
@@ -946,16 +955,11 @@ static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_m
         return 0;
     }
 
-    /* 扫描 Ctrl+C (0x03): 置位取消标志并把它从数据流中剔除 */
+    /* 扫描 Ctrl+C (0x03): 置位取消标志并立即返回负值 */
     for (int i = 0; i < n; i++) {
         if (buf[i] == 0x03) {
             s_cancel = true;
-            /* 用后续字节前移覆盖，缩短有效长度 */
-            for (int j = i; j < n - 1; j++) {
-                buf[j] = buf[j + 1];
-            }
-            n--;
-            i--;
+            return -1;      /* 取消优先，丢弃本批剩余数据 */
         }
     }
     return n;

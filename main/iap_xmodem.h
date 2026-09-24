@@ -23,7 +23,9 @@ extern "C" {
  * @param buf     输出缓冲区
  * @param len     期望读取的字节数
  * @param timeout 超时 (毫秒)
- * @return 实际读取的字节数
+ * @return > 0 实际读取的字节数
+ *         = 0 超时 (无数据)
+ *         < 0 取消 (调用方应尽快退出，见 ctx->cancel_flag)
  */
 typedef int (*iap_xmodem_read_fn_t)(void *user, uint8_t *buf, size_t len,
                                     uint32_t timeout);

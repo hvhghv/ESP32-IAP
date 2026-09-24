@@ -62,11 +62,25 @@ static const char *TAG = "xmodem";
  * @param ctx     协议上下文
  * @param out     输出字节
  * @param timeout 超时 (毫秒)，0 表示不等待
- * @return true 成功收到
+ * @return 1  成功收到
+ *         0  超时 (无数据)
+ *        -1  已取消 (read 回调返回负值)
  */
-static bool xm_get_byte(iap_xmodem_ctx_t *ctx, uint8_t *out, uint32_t timeout)
+static int xm_get_byte(iap_xmodem_ctx_t *ctx, uint8_t *out, uint32_t timeout)
 {
-    return ctx->read(ctx->user, out, 1, timeout) == 1;
+    int n = ctx->read(ctx->user, out, 1, timeout);
+    if (n < 0) {
+        return -1;      /* 取消 */
+    }
+    return (n == 1) ? 1 : 0;
+}
+
+/**
+ * @brief 是否已被请求取消
+ */
+static inline bool xm_cancelled(iap_xmodem_ctx_t *ctx)
+{
+    return ctx->cancel_flag != NULL && *ctx->cancel_flag;
 }
 
 /**
@@ -108,23 +122,34 @@ static void xm_send_cancel(iap_xmodem_ctx_t *ctx)
  *
  * @param ctx    上下文
  * @param out_len 输出包长度 (128 或 1024)
- * @return 起始字符 (SOH/STX/EOT)，超时返回 0
+ * @return 起始字符 (SOH/STX/EOT)
+ *         0  超时
+ *         0xFF 已取消 (调用方据此返回 ESP_ERR_INVALID_STATE)
  */
+#define XM_WAIT_CANCELLED   0xFF
+
 static uint8_t xm_wait_start(iap_xmodem_ctx_t *ctx, size_t *out_len)
 {
     uint8_t c;
     uint32_t start = xTaskGetTickCount();
 
     while (1) {
+        /* 每轮都检查取消 —— 不能只在读失败时检查，
+         * 否则收到噪声字节时会一直循环而忽略 Ctrl+C。 */
+        if (xm_cancelled(ctx)) {
+            return XM_WAIT_CANCELLED;
+        }
+
         if (xTaskGetTickCount() - start > pdMS_TO_TICKS(XM_HANDSHAKE_SEC * 1000)) {
             return 0;
         }
 
-        if (!xm_get_byte(ctx, &c, 1000)) {
-            if (ctx->cancel_flag && *ctx->cancel_flag) {
-                return 0;
-            }
-            continue;
+        int r = xm_get_byte(ctx, &c, 1000);
+        if (r < 0) {
+            return XM_WAIT_CANCELLED;   /* read 回调报告取消 */
+        }
+        if (r == 0) {
+            continue;                   /* 超时: 回到循环顶部重新检查取消 */
         }
 
         if (c == XM_SOH) {
@@ -140,7 +165,7 @@ static uint8_t xm_wait_start(iap_xmodem_ctx_t *ctx, size_t *out_len)
         }
         if (c == XM_CAN) {
             ESP_LOGW(TAG, "收到 CAN，传输被取消");
-            return 0;
+            return XM_WAIT_CANCELLED;
         }
         /* 其它字符忽略 (可能是上一轮的噪声) */
     }
@@ -158,6 +183,9 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
 {
     size_t pkt_len = 0;
     uint8_t start = xm_wait_start(ctx, &pkt_len);
+    if (start == XM_WAIT_CANCELLED) {
+        return ESP_ERR_INVALID_STATE;   /* 已取消 */
+    }
     if (start == 0) {
         return ESP_ERR_TIMEOUT;
     }
@@ -169,7 +197,7 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
     /* 读取序号、反序号、数据、CRC */
     uint8_t hdr[2];
     if (ctx->read(ctx->user, hdr, 2, XM_PACKET_TIMEOUT) != 2) {
-        return ESP_ERR_TIMEOUT;
+        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
     }
 
     uint8_t seq  = hdr[0];
@@ -181,12 +209,12 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
     }
 
     if (ctx->read(ctx->user, data, pkt_len, XM_PACKET_TIMEOUT) != (int)pkt_len) {
-        return ESP_ERR_TIMEOUT;
+        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
     }
 
     uint8_t crc_bytes[2];
     if (ctx->read(ctx->user, crc_bytes, 2, XM_PACKET_TIMEOUT) != 2) {
-        return ESP_ERR_TIMEOUT;
+        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
     }
 
     uint16_t crc_recv = (uint16_t)((crc_bytes[0] << 8) | crc_bytes[1]);
@@ -229,7 +257,7 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
     /* 握手: 发送 'C' 请求 CRC 模式 */
     int handshake_retry = 0;
     while (!got_first) {
-        if (ctx->cancel_flag && *ctx->cancel_flag) {
+        if (xm_cancelled(ctx)) {
             result = ESP_ERR_INVALID_STATE;
             goto out;
         }
@@ -238,6 +266,13 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
 
         size_t data_len = 0;
         esp_err_t err = xm_recv_packet(ctx, pkt_buf, &data_len);
+
+        /* 取消: 立即退出，不重试 */
+        if (err == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "握手期间收到取消请求");
+            result = ESP_ERR_INVALID_STATE;
+            goto out;
+        }
 
         /* 握手阶段直接收到 EOT (0 字节传输): 回 ACK 后结束 */
         if (err == ESP_ERR_NOT_FINISHED) {
@@ -304,7 +339,7 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
     /* 主接收循环 */
     uint32_t last_progress = xTaskGetTickCount();   /* 上次成功收包的时刻 */
     while (!finished) {
-        if (ctx->cancel_flag && *ctx->cancel_flag) {
+        if (xm_cancelled(ctx)) {
             xm_send_cancel(ctx);
             result = ESP_ERR_INVALID_STATE;
             goto out;
@@ -400,7 +435,14 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
             uint8_t c;
             uint32_t wait_start = xTaskGetTickCount();
             while (xTaskGetTickCount() - wait_start < pdMS_TO_TICKS(10000)) {
-                if (xm_get_byte(ctx, &c, XM_PACKET_TIMEOUT)) {
+                if (xm_cancelled(ctx)) {
+                    break;
+                }
+                int r = xm_get_byte(ctx, &c, XM_PACKET_TIMEOUT);
+                if (r < 0) {
+                    break;      /* 取消 */
+                }
+                if (r > 0) {
                     if (c == XM_EOT) {
                         xm_put_byte(ctx, XM_ACK);
                         finished = true;
@@ -422,7 +464,8 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
     /* 等待 EOT 并确认 */
     if (file_size == 0) {
         uint8_t c;
-        if (xm_get_byte(ctx, &c, XM_PACKET_TIMEOUT) && c == XM_EOT) {
+        int r = xm_get_byte(ctx, &c, XM_PACKET_TIMEOUT);
+        if (r > 0 && c == XM_EOT) {
             xm_put_byte(ctx, XM_ACK);
         }
     }
@@ -485,7 +528,11 @@ static esp_err_t xm_send_packet(iap_xmodem_ctx_t *ctx, uint8_t seq,
          */
         for (;;) {
             uint8_t resp;
-            if (!xm_get_byte(ctx, &resp, XM_PACKET_TIMEOUT)) {
+            int r = xm_get_byte(ctx, &resp, XM_PACKET_TIMEOUT);
+            if (r < 0) {
+                return ESP_ERR_INVALID_STATE;   /* 用户取消 */
+            }
+            if (r == 0) {
                 break;              /* 超时: 外层重发 */
             }
             if (resp == XM_ACK) {
@@ -528,11 +575,16 @@ esp_err_t iap_xmodem_send(iap_xmodem_ctx_t *ctx,
     bool handshake_ok = false;
 
     while (xTaskGetTickCount() - start < pdMS_TO_TICKS(XM_HANDSHAKE_SEC * 1000)) {
-        if (ctx->cancel_flag && *ctx->cancel_flag) {
+        if (xm_cancelled(ctx)) {
             result = ESP_ERR_INVALID_STATE;
             goto out;
         }
-        if (xm_get_byte(ctx, &c, 1000)) {
+        int r = xm_get_byte(ctx, &c, 1000);
+        if (r < 0) {
+            result = ESP_ERR_INVALID_STATE;
+            goto out;
+        }
+        if (r > 0) {
             if (c == XM_CRC_CHAR || c == XM_NAK) {
                 handshake_ok = true;
                 break;
@@ -570,7 +622,7 @@ esp_err_t iap_xmodem_send(iap_xmodem_ctx_t *ctx,
     uint32_t last_progress = xTaskGetTickCount();   /* 上次成功发包的时刻 */
 
     while (offset < file_size) {
-        if (ctx->cancel_flag && *ctx->cancel_flag) {
+        if (xm_cancelled(ctx)) {
             xm_send_cancel(ctx);
             result = ESP_ERR_INVALID_STATE;
             goto out;
@@ -621,9 +673,18 @@ esp_err_t iap_xmodem_send(iap_xmodem_ctx_t *ctx,
 
     /* 发送 EOT */
     for (int retry = 0; retry < XM_RETRY_MAX; retry++) {
+        if (xm_cancelled(ctx)) {
+            result = ESP_ERR_INVALID_STATE;
+            goto out;
+        }
         xm_put_byte(ctx, XM_EOT);
         uint8_t resp;
-        if (xm_get_byte(ctx, &resp, XM_PACKET_TIMEOUT) && resp == XM_ACK) {
+        int r = xm_get_byte(ctx, &resp, XM_PACKET_TIMEOUT);
+        if (r < 0) {
+            result = ESP_ERR_INVALID_STATE;
+            goto out;
+        }
+        if (r > 0 && resp == XM_ACK) {
             break;
         }
     }
