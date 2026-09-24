@@ -358,6 +358,11 @@ jobs:
 
           if [ "${{ needs.build.result }}" == "success" ]; then
             echo "✅ 所有芯片构建成功" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build.result }}" == "cancelled" ]; then
+            # 被并发控制取消 (cancel-in-progress) 不算失败:
+            # 同一提交通常另有一个完整成功的 run。
+            echo "⏹️ 构建已取消（并发控制），请查看同提交的另一次运行" \
+              >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ 部分芯片构建失败，请查看上方任务日志" >> $GITHUB_STEP_SUMMARY
             exit 1
@@ -365,6 +370,8 @@ jobs:
 
           if [ "${{ needs.embed-bootloader.result }}" == "success" ]; then
             echo "✅ 内置 bootloader 已同步到 HTML" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.embed-bootloader.result }}" == "cancelled" ]; then
+            echo "⏹️ 内置 bootloader 同步已取消" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ 内置 bootloader 同步失败" >> $GITHUB_STEP_SUMMARY
             exit 1
