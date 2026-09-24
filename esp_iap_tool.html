@@ -3853,10 +3853,22 @@ async function doBurn() {
   desc.forEach((d, i) => termWrite("  " + (i + 1) + ". " + d, "t-dim"));
 
   try {
+    /*
+     * flashMode / flashFreq 必须传 "keep"！
+     *
+     * esptool-js 的 _updateImageFlashParams() 会**重写地址 0x0 处镜像头**
+     * 的 flash 参数 (这是 esptool 命令行 --flash_freq/--flash_mode 的语义)。
+     * 若这里传 "80m"，bootloader 镜像头的 spi_speed 会被改成 0xF (DIV_1)，
+     * 设备 ROM 启动时按 80MHz 读 flash -> 读取超时 ->
+     * rst:0x7 (TG0_WDT_HPSYS) 看门狗复位循环，连二级 bootloader 都跑不起来。
+     *
+     * iap_side.bin 由 tools/merge_bin.py 生成时已写入正确的 flash 参数
+     * (dio / 40m / 4MB)，这里保持 "keep" 不做任何修改。
+     */
     await FLASHER.loader.writeFlash({
       fileArray: segs,
-      flashMode: "dio",
-      flashFreq: "80m",
+      flashMode: "keep",
+      flashFreq: "keep",
       flashSize: flashSizeForEsptool(),
       eraseAll: false,
       compress: true,
@@ -3908,7 +3920,7 @@ async function eraseCfgRegion() {
     const blank = new Uint8Array(8192).fill(0xFF);
     await FLASHER.loader.writeFlash({
       fileArray: [{ data: blank, address: 0x10000 }],
-      flashMode: "dio", flashFreq: "80m",
+      flashMode: "keep", flashFreq: "keep",
       flashSize: flashSizeForEsptool(),
       eraseAll: false, compress: true,
       reportProgress: (i, w, t) => setProgress(t ? w / t * 100 : 0, "擦除中..."),
@@ -4635,7 +4647,7 @@ async function dumpWriteBack() {
   try {
     await FLASHER.loader.writeFlash({
       fileArray: [{ data: part, address: addr }],
-      flashMode: "dio", flashFreq: "80m",
+      flashMode: "keep", flashFreq: "keep",
       flashSize: flashSizeForEsptool(),
       eraseAll: false, compress: true,
       reportProgress: (i, w, t) => {
@@ -5422,7 +5434,7 @@ async function eraseUserApp() {
         const blank = new Uint8Array(eraseSize).fill(0xFF);
         await FLASHER.loader.writeFlash({
           fileArray: [{ data: blank, address: eraseOffset }],
-          flashMode: "dio", flashFreq: "80m",
+          flashMode: "keep", flashFreq: "keep",
           flashSize: flashSizeForEsptool(),
           eraseAll: false, compress: true,
           reportProgress: (i, w, t) => appSetProgress(t ? w / t * 100 : 0, "擦除中..."),
