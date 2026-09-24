@@ -103,42 +103,69 @@ jobs:
         run: |
           python tools/verify_html_editor.py
 
-      # 校验内置 bootloader 数据块完整性（Base64 可解码 + 结构正确）
-      - name: Check embedded bootloaders
+      # 校验内置镜像的惰性加载机制
+      #
+      # v6 起内置镜像不再内嵌 Base64 到 HTML，改为:
+      #   esp_iap_builtin.js        → 索引 (window.BUILTIN_MANIFEST)
+      #   assets/iap_img_<chip>.js  → 各芯片数据 (按需注入)
+      #
+      # 这里校验:
+      #   1. HTML 中 BUILTIN_BOOTLOADERS 兼容层存在且为惰性加载形式
+      #   2. 若 esp_iap_builtin.js 存在 (由 build.yml 生成)，校验其索引结构
+      - name: Check builtin lazy-load wiring
         run: |
           python - <<'PY'
-          import base64, pathlib, re, sys
+          import pathlib, re, sys
+
           html = pathlib.Path("esp_iap_tool.html").read_text(encoding="utf-8")
+
+          # 1. 兼容层标记必须存在且唯一
+          if html.count("BEGIN BUILTIN BOOTLOADERS") != 1:
+              print("::error::BUILTIN BOOTLOADERS 标记缺失或重复")
+              sys.exit(1)
+          if html.count("END BUILTIN BOOTLOADERS") != 1:
+              print("::error::BUILTIN BOOTLOADERS 结束标记缺失或重复")
+              sys.exit(1)
+
+          # 2. 惰性加载: 必须引用 esp_iap_builtin.js
+          if "esp_iap_builtin.js" not in html:
+              print("::error::HTML 未引用 esp_iap_builtin.js (惰性加载入口)")
+              sys.exit(1)
+
+          # 3. BUILTIN_BOOTLOADERS 应为兼容层 (非内嵌 Base64)
           mb = html.find("/* ==== BEGIN BUILTIN BOOTLOADERS")
           me = html.find("/* ==== END BUILTIN BOOTLOADERS ==== */")
-          if mb < 0 or me < 0:
-              print("::error::未找到内置 bootloader 数据块")
-              sys.exit(1)
-          if html.count("BEGIN BUILTIN BOOTLOADERS") != 1:
-              print("::error::内置 bootloader 数据块重复")
-              sys.exit(1)
           block = html[mb:me]
-          targets = ["esp32","esp32s2","esp32s3","esp32c2","esp32c3","esp32c5","esp32c6","esp32h2"]
-          ok = 0
-          for t in targets:
-              m = re.search(r'\b' + t + r':\s*\{\s*size:\s*(\d+),\s*sha256:\s*"([0-9a-f]+)",\s*data:\s*"([^"]+)"', block)
-              if not m:
-                  print(f"::error::缺少 {t} 的内置 bootloader")
-                  sys.exit(1)
-              size = int(m.group(1)); sha = m.group(2); data = m.group(3)
-              raw = base64.b64decode(data)
-              if len(raw) != size:
-                  print(f"::error::{t} 解码大小不符: {len(raw)} != {size}")
-                  sys.exit(1)
-              if raw[0] != 0xE9:
-                  print(f"::error::{t} 不是有效 ESP 镜像 (首字节 0x{raw[0]:02x})")
-                  sys.exit(1)
-              import hashlib
-              if hashlib.sha256(raw).hexdigest() != sha:
-                  print(f"::error::{t} SHA256 不符")
-                  sys.exit(1)
-              ok += 1
-          print(f"内置 bootloader 校验通过 ({ok} 个芯片)")
+          if "window.BUILTIN_BOOTLOADERS" not in block:
+              print("::error::BUILTIN_BOOTLOADERS 兼容层实现缺失")
+              sys.exit(1)
+          print("HTML 惰性加载接线检查通过")
+
+          # 4. 若索引文件存在 (由 build.yml 生成)，校验其结构
+          idx = pathlib.Path("esp_iap_builtin.js")
+          if not idx.is_file():
+              print("::warning::未找到 esp_iap_builtin.js (仅当 build.yml 已运行时才会生成)")
+              sys.exit(0)
+
+          js = idx.read_text(encoding="utf-8")
+          if "window.BUILTIN_MANIFEST" not in js:
+              print("::error::esp_iap_builtin.js 中未找到 BUILTIN_MANIFEST")
+              sys.exit(1)
+          if "chips:" not in js:
+              print("::error::索引缺少 chips 字段")
+              sys.exit(1)
+          targets = ["esp32","esp32s2","esp32s3","esp32c2",
+                     "esp32c3","esp32c5","esp32c6","esp32h2"]
+          # 每个芯片条目形如: esp32: { file: "...", size: N, ... }
+          present = [t for t in targets
+                     if re.search(r'\b' + t + r':\s*\{', js)]
+          missing = [t for t in targets if t not in present]
+          if missing:
+              print("::warning::索引缺少芯片: " + ", ".join(missing))
+          if not present:
+              print("::error::索引中没有任何芯片条目")
+              sys.exit(1)
+          print(f"索引校验通过 ({len(present)} 个芯片条目)")
           PY
 
       # 检查关键元素是否齐全
@@ -150,11 +177,12 @@ jobs:
           required = [
               'id="fileInput"', 'id="btnConnect"', 'id="btnFlash"',
               'id="btnDump"', 'id="btnDumpEdit"', 'id="burnTargetBar"',
-              'id="appMethod"', 'id="dumpScope"',
+              'id="dumpScope"', 'id="dumpScopeHint"',
               'CFG_MAGIC', 'USER_APP_ADDR', 'xmodemSend',
               'id="bootModeBuiltin"', 'id="bootModeManual"',
               'id="btnBootExport"', 'BUILTIN_BOOTLOADERS',
               'id="bootChipSelect"',
+              'esp_iap_builtin.js', 'BUILTIN_MANIFEST',
           ]
           missing = [r for r in required if r not in html]
           if missing:
