@@ -51,6 +51,52 @@ static httpd_handle_t s_server = NULL;
 #define HTTP_UPLOAD_CHUNK   4096
 
 /* -------------------------------------------------------------------------- */
+/* 延迟重启基础设施                                                            */
+/* -------------------------------------------------------------------------- */
+/*
+ * 为什么重启/启动必须放到独立任务:
+ *
+ *   iap_image_boot_user_app() / iap_image_boot_slot() 内部会调用
+ *   iap_http_stop() → httpd_stop()。而 httpd_stop() 是**阻塞**函数 ——
+ *   它先通知 httpd 任务退出, 然后**等待该任务结束**。
+ *
+ *   若在 URI handler 里直接调用, 就形成自等待死锁:
+ *     httpd 任务 → handler → httpd_stop() → 等 httpd 任务退出
+ *   而 httpd 任务正卡在 handler 里, 永远等不到 → 设备卡死
+ *   (表现为"点击启动用户程序后无响应")。
+ *
+ *   因此 handler 只负责"发响应 + 创建本任务"并立即返回, 让 httpd 任务
+ *   恢复自由; 真正的重启由独立任务在响应送达后执行。
+ */
+
+/** 待启动的槽号 (由 handler 写入, 由 slot_boot_task 读取) */
+static uint8_t s_pending_boot_slot = 0;
+
+/** 延迟启动任务栈大小 (含 WiFi 释放等调用) */
+#define IAP_BOOT_TASK_STACK     4096
+
+/** 等待响应送达对端的时长 (无线链路可能重传, 留足余量) */
+#define IAP_BOOT_DELAY_MS       1500
+
+/* 延迟任务函数 (定义在文件后部, 此处前置声明供 handler 引用) */
+static void boot_task(void *arg);
+static void slot_boot_task(void *arg);
+static void reboot_task(void *arg);
+
+/**
+ * @brief 创建一个延迟执行的重启/启动任务
+ *
+ * @param name 任务名
+ * @param fn   任务函数
+ * @return ESP_OK 创建成功
+ */
+static esp_err_t spawn_boot_task(const char *name, TaskFunction_t fn)
+{
+    BaseType_t ok = xTaskCreate(fn, name, IAP_BOOT_TASK_STACK, NULL, 5, NULL);
+    return (ok == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+/* -------------------------------------------------------------------------- */
 /* 简易 Web 界面                                                               */
 /* -------------------------------------------------------------------------- */
 /*
@@ -653,9 +699,23 @@ static esp_err_t handler_cfg_full_post(httpd_req_t *req)
         }
     }
     if (do_reboot) {
-        send_text(req, "配置已保存，正在重启...", HTTPD_200);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+        /*
+         * 用独立任务重启: 保证响应先送达。
+         * esp_restart() 本身不死锁, 但若在 handler 里直接重启,
+         * 响应可能还在 TCP 发送缓冲里 → 浏览器收不到。
+         */
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        esp_err_t rerr = httpd_resp_sendstr(req, "配置已保存，正在重启...");
+        if (rerr != ESP_OK) {
+            return rerr;
+        }
+        if (spawn_boot_task("iap_reboot", reboot_task) != ESP_OK) {
+            ESP_LOGE(TAG, "无法创建重启任务");
+            return ESP_FAIL;
+        }
+        return ESP_OK;
     }
 
     return send_text(req, "配置已保存", NULL);
@@ -879,17 +939,28 @@ static esp_err_t handler_slot_set(httpd_req_t *req)
         /*
          * 槽不存在或无镜像时，iap_image_boot_slot() 会自动回落到 IAP
          * (factory)，不会卡死。这里如实告知调用方。
+         *
+         * 注意: 必须用独立任务执行启动 —— iap_image_boot_slot() 内部
+         * 会调用 iap_http_stop() → httpd_stop(), 在 handler 里同步调用
+         * 会自等待死锁 (详见 boot_task 注释)。
          */
         bool ok = iap_image_slot_present((uint8_t)slot);
-        if (ok) {
-            send_text(req, "已切换活动槽，正在重启...", HTTPD_200);
-        } else {
-            send_text(req,
-                      "该槽无镜像，将回落到 IAP 下载模式并重启...",
-                      HTTPD_200);
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        esp_err_t rerr = httpd_resp_sendstr(req, ok
+            ? "已切换活动槽，正在重启..."
+            : "该槽无镜像，将回落到 IAP 下载模式并重启...");
+        if (rerr != ESP_OK) {
+            return rerr;
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
-        iap_image_boot_slot((uint8_t)slot);
+
+        /* 把槽号传给任务 (静态变量, 同一时刻只会有一个启动请求) */
+        s_pending_boot_slot = (uint8_t)slot;
+        if (spawn_boot_task("iap_slot_boot", slot_boot_task) != ESP_OK) {
+            ESP_LOGE(TAG, "无法创建槽启动任务");
+            return ESP_FAIL;
+        }
         return ESP_OK;
     }
 
@@ -1280,23 +1351,93 @@ static esp_err_t handler_erase(httpd_req_t *req)
     return send_text(req, "用户程序区已擦除", NULL);
 }
 
+/*
+ * 延迟重启任务 (基础设施见文件顶部 "延迟重启基础设施")
+ */
+
+static void boot_task(void *arg)
+{
+    (void)arg;
+
+    /* 等待 TCP 把响应真正送达对端 */
+    vTaskDelay(pdMS_TO_TICKS(IAP_BOOT_DELAY_MS));
+
+    ESP_LOGI(TAG, "执行用户程序启动...");
+    iap_image_boot_user_app();
+
+    /* 正常不会返回 (内部 esp_restart); 走到这里说明启动失败 */
+    ESP_LOGE(TAG, "启动用户程序失败, 任务退出");
+    vTaskDelete(NULL);
+}
+
+/** 启动指定槽 (由 /api/slot 的 boot=true 触发) */
+static void slot_boot_task(void *arg)
+{
+    (void)arg;
+    uint8_t slot = s_pending_boot_slot;
+
+    vTaskDelay(pdMS_TO_TICKS(IAP_BOOT_DELAY_MS));
+
+    ESP_LOGI(TAG, "执行 OTA 槽 %u 启动...", (unsigned)slot);
+    iap_image_boot_slot(slot);
+
+    ESP_LOGE(TAG, "启动 OTA 槽 %u 失败, 任务退出", (unsigned)slot);
+    vTaskDelete(NULL);
+}
+
+/** 纯重启任务 (由 /api/reboot 与配置保存的 reboot=true 触发) */
+static void reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(IAP_BOOT_DELAY_MS));
+    ESP_LOGI(TAG, "执行重启...");
+    esp_restart();
+}
+
 static esp_err_t handler_boot(httpd_req_t *req)
 {
     if (!iap_image_user_app_present()) {
         return send_text(req, "用户程序区无镜像 (首字节非 0xE9)", HTTPD_400);
     }
 
-    send_text(req, "即将重启进入用户程序...", NULL);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    iap_image_boot_user_app();
+    /*
+     * 关键: 响应必须**先完整送达浏览器**, 且不能在本任务里同步调用
+     * httpd_stop() (会自等待死锁, 详见 boot_task 注释)。
+     *
+     * Connection: close 让浏览器明确知道响应结束即断开, 不必复用
+     * 连接等待后续数据。
+     */
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_sendstr(req, "即将重启进入用户程序...");
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* 交给独立任务延迟重启, 本 handler 立即返回 */
+    if (spawn_boot_task("iap_boot", boot_task) != ESP_OK) {
+        ESP_LOGE(TAG, "无法创建启动任务");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
 static esp_err_t handler_reboot(httpd_req_t *req)
 {
-    send_text(req, "即将重启...", NULL);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_restart();
+    /* 同 handler_boot: 先确保响应送达, 再由独立任务重启 */
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_sendstr(req, "即将重启...");
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (spawn_boot_task("iap_reboot", reboot_task) != ESP_OK) {
+        ESP_LOGE(TAG, "无法创建重启任务");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 

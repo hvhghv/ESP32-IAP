@@ -507,15 +507,39 @@ function download(){
 }
 
 /**
- * 执行一个 POST 动作 (app erase / boot / clearfail 等)。
+ * 执行一个 POST 动作 (校验 / 擦除 / 启动 / 重启 等)。
  *
- * 响应状态必须在同一个回调作用域内取, 不能跨 .then() 引用。
+ * 响应状态必须在同一个回调作用域内取, 不能跨 .then() 引用
+ * (旧实现 .then(r=>r.text()).then(t=>{ r.ok ... }) 会抛
+ *  ReferenceError: r is not defined)。
+ *
+ * reboot 类接口 (/api/boot, /api/reboot) 会让设备重启, 连接必然
+ * 在响应后中断。此时 fetch 的 reject 是**预期行为**, 不应作为
+ * 错误提示 —— 固件已改为先发响应再延迟重启, 因此通常能正常收到
+ * 响应; 万一没收到也按"已发出指令"处理。
  */
 function act(u){
-  fetch(u,{method:'POST'})
+  const isReboot = /\/(boot|reboot)$/.test(u);
+
+  fetch(u, {method:'POST'})
     .then(r => r.text().then(t => ({ ok: r.ok, t })))
-    .then(({ok,t}) => { log(t, ok?'ok':'err'); load(); })
-    .catch(e => log('失败: '+e,'err'));
+    .then(({ok,t}) => {
+      log(t, ok ? 'ok' : 'err');
+      if(!ok) return;
+      if(isReboot){
+        log('设备正在重启，稍后请重新连接。', 'dim');
+      } else {
+        load();
+      }
+    })
+    .catch(e => {
+      if(isReboot){
+        /* 设备已重启导致连接中断 —— 这是预期结果 */
+        log('指令已发送，设备正在重启: ' + e.message, 'dim');
+      } else {
+        log('失败: ' + e.message, 'err');
+      }
+    });
 }
 
 /* ======================= 功能开关 ======================= */
