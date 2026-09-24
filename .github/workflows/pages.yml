@@ -72,11 +72,17 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGER_RID: ${{ github.event.workflow_run.id }}
         run: |
           set -e
-          RID=$(gh run list --workflow=build.yml --branch=main \
-                  --status=success --limit=1 --json databaseId \
-                  --jq '.[0].databaseId')
+          # workflow_run 触发时直接用触发本次运行的 build run id；
+          # 否则取最近一次成功的 build.yml。
+          RID="$TRIGGER_RID"
+          if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+            RID=$(gh run list --workflow=build.yml --branch=main \
+                    --status=success --limit=1 --json databaseId \
+                    --jq '.[0].databaseId')
+          fi
           if [ -z "$RID" ] || [ "$RID" = "null" ]; then
             echo "::warning::未找到成功的 build.yml 运行，跳过内置镜像下载"
             exit 0
@@ -246,11 +252,11 @@ jobs:
     name: Deploy to Pages
     needs: verify
     runs-on: ubuntu-latest
+    # push / 手动 / 固件构建完成后 均部署。
+    # workflow_run 已由触发条件限制为 build.yml 完成事件，
+    # 且 verify 通过才会执行，故无需再判断 conclusion。
     if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success')
+      github.event_name != 'pull_request'
 
     environment:
       name: github-pages
@@ -268,11 +274,17 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGER_RID: ${{ github.event.workflow_run.id }}
         run: |
           set -e
-          RID=$(gh run list --workflow=build.yml --branch=main \
-                  --status=success --limit=1 --json databaseId \
-                  --jq '.[0].databaseId')
+          # workflow_run 触发时直接用触发本次运行的 build run id；
+          # 否则取最近一次成功的 build.yml。
+          RID="$TRIGGER_RID"
+          if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+            RID=$(gh run list --workflow=build.yml --branch=main \
+                    --status=success --limit=1 --json databaseId \
+                    --jq '.[0].databaseId')
+          fi
           if [ -z "$RID" ] || [ "$RID" = "null" ]; then
             echo "::warning::未找到成功的 build.yml 运行，跳过内置镜像下载"
             exit 0
