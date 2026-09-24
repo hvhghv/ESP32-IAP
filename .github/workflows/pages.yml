@@ -73,12 +73,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIGGER_RID: ${{ github.event.workflow_run.id }}
+          TRIGGER_OK: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -e
-          # workflow_run 触发时直接用触发本次运行的 build run id；
-          # 否则取最近一次成功的 build.yml。
-          RID="$TRIGGER_RID"
-          if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+          # 优先用触发本次运行的 build run，但仅当其成功时；
+          # 被取消/失败的 run 不会产出 artifact，此时回退到最近一次成功运行。
+          RID=""
+          if [ "$TRIGGER_OK" = "success" ] && [ -n "$TRIGGER_RID" ] && \
+             [ "$TRIGGER_RID" != "null" ]; then
+            RID="$TRIGGER_RID"
+          fi
+          if [ -z "$RID" ]; then
             RID=$(gh run list --workflow=build.yml --branch=main \
                     --status=success --limit=1 --json databaseId \
                     --jq '.[0].databaseId')
@@ -86,6 +91,14 @@ jobs:
           if [ -z "$RID" ] || [ "$RID" = "null" ]; then
             echo "::warning::未找到成功的 build.yml 运行，跳过内置镜像下载"
             exit 0
+          fi
+          # 确认该 run 确实产出 web-editor-builtin (被取消的 run 没有)
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts" \
+                 --jq '.artifacts[].name' | grep -qx 'web-editor-builtin'; then
+            echo "::warning::run $RID 未产出 web-editor-builtin，回退到最近一次成功运行"
+            RID=$(gh run list --workflow=build.yml --branch=main \
+                    --status=success --limit=1 --json databaseId \
+                    --jq '.[0].databaseId')
           fi
           echo "从 build.yml run $RID 下载 web-editor-builtin ..."
           rm -rf _builtin_tmp && mkdir -p _builtin_tmp
@@ -275,12 +288,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIGGER_RID: ${{ github.event.workflow_run.id }}
+          TRIGGER_OK: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -e
-          # workflow_run 触发时直接用触发本次运行的 build run id；
-          # 否则取最近一次成功的 build.yml。
-          RID="$TRIGGER_RID"
-          if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+          # 优先用触发本次运行的 build run，但仅当其成功时；
+          # 被取消/失败的 run 不会产出 artifact，此时回退到最近一次成功运行。
+          RID=""
+          if [ "$TRIGGER_OK" = "success" ] && [ -n "$TRIGGER_RID" ] && \
+             [ "$TRIGGER_RID" != "null" ]; then
+            RID="$TRIGGER_RID"
+          fi
+          if [ -z "$RID" ]; then
             RID=$(gh run list --workflow=build.yml --branch=main \
                     --status=success --limit=1 --json databaseId \
                     --jq '.[0].databaseId')
@@ -288,6 +306,14 @@ jobs:
           if [ -z "$RID" ] || [ "$RID" = "null" ]; then
             echo "::warning::未找到成功的 build.yml 运行，跳过内置镜像下载"
             exit 0
+          fi
+          # 确认该 run 确实产出 web-editor-builtin (被取消的 run 没有)
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts" \
+                 --jq '.artifacts[].name' | grep -qx 'web-editor-builtin'; then
+            echo "::warning::run $RID 未产出 web-editor-builtin，回退到最近一次成功运行"
+            RID=$(gh run list --workflow=build.yml --branch=main \
+                    --status=success --limit=1 --json databaseId \
+                    --jq '.[0].databaseId')
           fi
           echo "从 build.yml run $RID 下载 web-editor-builtin ..."
           rm -rf _builtin_tmp && mkdir -p _builtin_tmp
