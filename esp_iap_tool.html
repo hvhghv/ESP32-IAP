@@ -254,7 +254,40 @@
   button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
   button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 
-  .btnrow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  /*
+   * 按钮行: 所有按钮**并排一行**, 不换行。
+   *
+   * 原先 flex-wrap: wrap 会让按钮按内容宽度排布, 窄屏或中文按钮
+   * 文字较长时被挤到第二行, 视觉上参差不齐。
+   *
+   * 这里改为 nowrap + 内容宽度自适应:
+   *   - flex: 0 1 auto —— 按内容宽度排布, 空间不足时才收缩
+   *   - min-width: 0   —— 允许收缩到内容宽度以下
+   *   - 文字过长时省略号截断, 保证始终横排且不溢出
+   *
+   * 这样短按钮 (如「断开」) 保持紧凑, 长按钮自动压缩, 整体一行对齐。
+   */
+  .btnrow {
+    display: flex; gap: 10px; flex-wrap: nowrap;
+    margin-top: 14px; align-items: stretch;
+  }
+  .btnrow > button {
+    flex: 0 1 auto; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /*
+   * 窄屏: 缩小字号与间距。
+   *
+   * 4 个中文长按钮 (烧录操作行) 在 360px 屏上仍会超出约 18px,
+   * 单纯缩小字号不够 —— 因此给该行加 .btnrow--wrap, 允许折成 2+2,
+   * 既保证文字完整可读, 又保持整齐的两行布局。
+   */
+  @media (max-width: 720px) {
+    .btnrow { gap: 6px; }
+    .btnrow > button { font-size: 11.5px; padding: 7px 8px; }
+    .btnrow--wrap { flex-wrap: wrap; }
+    .btnrow--wrap > button { flex: 1 1 calc(50% - 3px); }
+  }
 
   .flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
   .flag {
@@ -642,7 +675,7 @@
         <div class="hint" id="burnTargetHint">请至少选择一个文件。</div>
       </div>
 
-      <div class="btnrow">
+      <div class="btnrow btnrow--wrap">
         <button class="primary" id="btnFlash" disabled>开始烧录</button>
         <button id="btnAppErase" disabled>擦除用户程序区</button>
         <button id="btnAppInfo" disabled>查询用户程序信息</button>
@@ -919,7 +952,7 @@
           </div>
         </div>
 
-        <div class="btnrow">
+        <div class="btnrow btnrow--wrap">
           <button class="primary" id="btnDumpWrite">写回设备</button>
           <button id="btnDumpReload">重新读取</button>
           <button id="btnDumpExport">导出为 bin</button>

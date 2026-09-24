@@ -32,10 +32,15 @@ ROOT = os.path.dirname(HERE)
 EDITOR = "esp_iap_tool.html"
 
 # 关键元素（与 CI 检查保持一致）
+#
+# 说明: id="appMethod" 已在「烧录方式」重构中移除（改为固定走 esptool
+# 整段写入），此处同步删除，避免校验误报。
 REQUIRED = [
     'id="fileInput"', 'id="btnConnect"', 'id="btnFlash"',
     'id="btnDump"', 'id="btnDumpEdit"', 'id="burnTargetBar"',
-    'id="appMethod"', 'id="dumpScope"',
+    'id="dumpScope"',
+    'id="btnAppErase"', 'id="btnAppInfo"', 'id="btnAppBoot"',
+    'id="btnExitToIap"', 'id="btnExitToApp"',
     'CFG_MAGIC', 'USER_APP_ADDR', 'xmodemSend',
 ]
 
