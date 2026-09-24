@@ -648,9 +648,21 @@
         <button id="btnAppInfo" disabled>查询用户程序信息</button>
         <button id="btnAppBoot" disabled>启动用户程序</button>
       </div>
+      <div class="btnrow">
+        <button id="btnExitToIap" disabled>关闭串口并进入 IAP</button>
+        <button id="btnExitToApp" disabled>关闭串口并正常启动</button>
+      </div>
+      <div class="hint">
+        <b>关闭串口并进入 IAP</b>：向串口发送裸命令 <code>iap</code>，设备在启动
+        等待窗口内收到后立即中止等待、进入 IAP 终端（<code>iap&gt;</code>）→ 释放串口，
+        停在 IAP 等待烧录。<br>
+        <b>关闭串口并正常启动</b>：仅用 esptool <b>硬复位</b>设备（不发任何命令）
+        → 设备按当前配置正常启动 → 释放串口。<br>
+        <span class="t-dim">两者都会释放串口，便于其他工具（如串口助手）接管。</span>
+      </div>
       <div class="hint">
         <b>救援进入 IAP</b>（已取消 flash 标志区，v5）：上电时按住 <b>BOOT 键 (GPIO0)</b>，
-        或在等待窗口内向串口发送 <code>iap</code> 字符串。
+        或在启动等待窗口内向串口发送 <code>iap</code> 字符串（不带参数）。
       </div>
 
       <div class="progress mt" id="progBox" style="display:none">
@@ -4908,6 +4920,14 @@ async function xmodemSend(session, data, onProgress, log) {
 const APPFLASH = {
   session: null,
   busy: false,
+  /**
+   * 最近一次使用过的串口对象。
+   *
+   * 用途: 「关闭串口并进入 IAP / 正常启动」需要在释放串口后
+   *       仍能用 esptool 硬复位设备, 而 cleanupFlasher() 会清空
+   *       FLASHER.port, 故在此保留一份引用。
+   */
+  lastPort: null,
 };
 
 /*
@@ -5028,6 +5048,99 @@ function initAppFlasher() {
   $("btnAppErase").addEventListener("click", eraseUserApp);
   $("btnAppInfo").addEventListener("click", queryUserApp);
   $("btnAppBoot").addEventListener("click", bootUserApp);
+  $("btnExitToIap").addEventListener("click", () => exitWithTarget("iap"));
+  $("btnExitToApp").addEventListener("click", () => exitWithTarget("app"));
+}
+
+/* -------------------------------------------------------------------------- */
+/* 关闭串口并切换启动目标                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 关闭串口并按目标启动。
+ *
+ * 两种模式:
+ *   "iap" —— 发送裸命令 `iap` (不带参数!)。
+ *            设备启动等待窗口内监听 UART/USB，收到 "iap" 即中止等待、
+ *            进入 IAP 下载模式并停在 IAP 终端。
+ *            ⚠️ 不能发 `iap boot` —— 那是 IAP 终端里的子命令，
+ *            作用是"重启并启动用户 APP"，语义相反；且等待窗口
+ *            的触发检测只匹配整行 "iap"，带参数不生效。
+ *   "app" —— **仅用 esptool 硬复位**，不发任何命令。
+ *            设备按当前配置正常启动 (用户程序有效则运行它)。
+ *
+ * 两者结束后都会关闭串口，释放给其他工具使用。
+ *
+ * @param {"iap"|"app"} target 启动目标
+ */
+async function exitWithTarget(target) {
+  if (APPFLASH.busy) return;
+  if (!FLASHER.port && !APPFLASH.lastPort) {
+    showStatus("请先连接设备", "err");
+    return;
+  }
+
+  const toIap = target === "iap";
+  const label = toIap ? "进入 IAP" : "正常启动";
+
+  if (!confirm(
+    "即将执行：\n\n" +
+    (toIap
+      ? "  1. 发送 iap 命令（中止启动等待，进入 IAP 终端）\n  2. 设备停在 IAP 终端\n"
+      : "  1. 硬复位设备（按当前配置正常启动）\n") +
+    "  3. 关闭串口（释放给其他工具）\n\n" +
+    "确认继续？"
+  )) return;
+
+  APPFLASH.busy = true;
+  setFlashButtons(false);
+  appTermClear();
+  appTermWrite("=== 关闭串口并" + label + " ===", "t-info");
+
+  try {
+    if (toIap) {
+      /* ---- 进入 IAP: 发裸命令 "iap", 设备中止等待窗口 ---- */
+      let session = null;
+      try {
+        session = await openIapSession(parseInt($("flashBaud").value, 10));
+        appTermWrite("发送命令: iap", "t-dim");
+        await session.write(new TextEncoder().encode("iap\r"));
+
+        // 读取设备回显与进入 IAP 的日志
+        await new Promise(r => setTimeout(r, 1200));
+        const resp = await sendTermCmd(session, "", 800);
+        const text = resp.replace(/\r/g, "");
+        if (text.trim()) appTermWrite(text, "t-dim");
+
+        await session.close();
+        session = null;
+      } finally {
+        try { if (session) await session.close(); } catch (_) {}
+      }
+      appTermWrite("串口已释放", "t-ok");
+      showStatus(
+        "已进入 IAP。\n\n  设备停在 IAP 终端 (iap>)\n  串口已关闭，可由其他工具接管",
+        "ok"
+      );
+    } else {
+      /* ---- 正常启动: 纯 esptool 硬复位, 不发命令 ---- */
+      await hardResetAndRelease(parseInt($("flashBaud").value, 10));
+      appTermWrite("已硬复位，串口已释放", "t-ok");
+      showStatus(
+        "已正常启动。\n\n  设备按当前配置启动\n  串口已关闭，可由其他工具接管",
+        "ok"
+      );
+    }
+    appTermWrite("=== 完成 ===", "t-ok");
+  } catch (err) {
+    appTermWrite("失败: " + (err.message || err), "t-err");
+    showStatus("操作失败: " + (err.message || err), "err");
+  } finally {
+    // 确保 esptool 侧引用与串口都已释放
+    try { await cleanupFlasher(); } catch (_) {}
+    APPFLASH.busy = false;
+    setFlashButtons(false);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -5106,6 +5219,7 @@ async function openIapSession(baud) {
 
   // 先保存 port 引用 —— cleanupFlasher() 会把 FLASHER.port 置 null
   const port = FLASHER.port;
+  APPFLASH.lastPort = port;      // 供后续硬复位复用
 
   // 若 esptool 仍持有端口，先断开以释放串口
   if (FLASHER.connected) {
@@ -5117,6 +5231,75 @@ async function openIapSession(baud) {
   const session = new SerialSession(port, baud);
   await session.open();
   return session;
+}
+
+/**
+ * 用 esptool 硬复位设备后释放串口。
+ *
+ * 用途: 「关闭串口并正常启动」—— 设备按当前配置正常启动
+ *       (若用户程序有效则运行它，否则 IAP 会停在终端)，
+ *       本工具随即释放串口供其他工具接管。
+ *
+ * 实现要点:
+ *   - 必须用 esptool 的 Loader 才能操作 DTR/RTS 完成复位；
+ *     裸串口无法可靠触发 ESP32 的硬复位时序。
+ *   - 复位用 loader.after("hard_reset") (esptool-js 0.6.1 无
+ *     hardReset() 方法)。
+ *   - 复位后**不做**任何 flash 操作，也不发终端命令。
+ *   - 复位完成即关闭串口，避免占用。
+ *
+ * @param {number} baud 波特率
+ */
+async function hardResetAndRelease(baud) {
+  const port = FLASHER.port || APPFLASH.lastPort;
+  if (!port) {
+    throw new Error("未获取到串口（请先在「烧录到设备」中连接设备）");
+  }
+
+  // 若 esptool 仍持有端口，先释放
+  if (FLASHER.connected) {
+    await cleanupFlasher();
+    $("btnConnect").disabled = false;
+  }
+
+  // esptool-js 需已加载 (与「烧录到设备」共用同一实例)
+  if (!ESPTOOL) {
+    await loadEsptool();
+  }
+  if (!ESPTOOL || !ESPTOOL.Transport || !ESPTOOL.ESPLoader) {
+    throw new Error("esptool-js 未就绪（请检查网络后重试）");
+  }
+
+  const transport = new ESPTOOL.Transport(port, true);
+  const loader = new ESPTOOL.ESPLoader({
+    transport,
+    baudrate: baud || 115200,
+    terminal: {
+      clean() {},
+      writeLine() {},
+      write() {},
+    },
+  });
+
+  try {
+    appTermWrite("连接设备以执行硬复位...", "t-dim");
+    await loader.main();
+
+    appTermWrite("执行硬复位...", "t-dim");
+    /*
+     * esptool-js 0.6.1 的 ESPLoader 没有 hardReset() 方法，
+     * 复位统一走 after("hard_reset") —— 内部用 HardReset 类
+     * 操作 RTS 引脚完成复位时序。
+     */
+    await loader.after("hard_reset");
+
+    // 复位后设备立即启动；稍等确保复位时序完成再释放串口
+    await new Promise(r => setTimeout(r, 300));
+  } finally {
+    // 释放串口: 先断开 transport，再关闭底层 port
+    try { await transport.disconnect(); } catch (_) {}
+    try { await port.close(); } catch (_) {}
+  }
 }
 
 /** 发送终端命令并等待回显 */
@@ -5142,7 +5325,8 @@ function setFlashButtons(enabled) {
   updateBurnSummary();   // 内部会设置 btnFlash
 
   // v5: btnForceIap 已删除 (flash 标志区取消，救援改用 GPIO0/断电)
-  const ids = ["btnAppErase", "btnAppInfo", "btnAppBoot"];
+  const ids = ["btnAppErase", "btnAppInfo", "btnAppBoot",
+               "btnExitToIap", "btnExitToApp"];
   for (const id of ids) {
     const el = $(id);
     if (el) el.disabled = !enabled || !canAppCmd;
@@ -5303,7 +5487,8 @@ window.IAPDebug = {
   getConnDiag: () => {
     const ids = ["btnConnect", "btnFlash", "btnDisconnect",
                  "btnDump", "btnDumpEdit",
-                 "btnAppErase", "btnAppInfo", "btnAppBoot"];
+                 "btnAppErase", "btnAppInfo", "btnAppBoot",
+                 "btnExitToIap", "btnExitToApp"];
     const out = {};
     for (const id of ids) {
       const el = $(id);
@@ -5392,6 +5577,7 @@ window.IAPDebug = {
   setFlashButtons, setDumpButtons,
   getButtonState: () => {
     const ids = ["btnFlash", "btnAppErase", "btnAppInfo", "btnAppBoot",
+                 "btnExitToIap", "btnExitToApp",
                  "btnDump", "btnDumpEdit", "btnConnect",
                  "btnDisconnect", "btnPtDetect"];
     const o = {};
