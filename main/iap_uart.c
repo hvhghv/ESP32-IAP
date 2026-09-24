@@ -201,13 +201,41 @@ bool iap_term_any_ready(void)
  *   判定不是 ACK 而重传, 造成「设备已正确收包但发送方永远等不到 ACK」
  *   的死循环。
  *
- * 用法: XMODEM 会话开始前置位, 结束 (含所有错误路径) 后清除。
+ * ⚠️ 必须同时拦截两条输出路径:
+ *   1. iap_term_write / iap_term_printf  (终端引擎, 走所有后端)
+ *   2. ESP_LOGx                          (IDF 日志, 直接写控制台设备)
+ *      实测 ESP32-C6 上 IDF 日志直接写到 USB-Serial-JTAG,
+ *      绕过终端引擎, 因此必须用 esp_log_set_vprintf 单独拦截。
  */
 static volatile bool s_term_mute = false;
+
+/** 原始 IDF 日志输出函数 (被我们替换前的那个) */
+static vprintf_like_t s_log_vprintf_orig = NULL;
+
+/** 替换后的日志输出: 静默期间直接丢弃 */
+static int log_vprintf_muted(const char *fmt, va_list ap)
+{
+    if (s_term_mute) {
+        return 0;
+    }
+    if (s_log_vprintf_orig) {
+        return s_log_vprintf_orig(fmt, ap);
+    }
+    return vprintf(fmt, ap);
+}
+
+/** 安装日志拦截 (幂等) */
+static void log_hook_install(void)
+{
+    if (s_log_vprintf_orig == NULL) {
+        s_log_vprintf_orig = esp_log_set_vprintf(log_vprintf_muted);
+    }
+}
 
 /** 设置终端输出静默 (供 XMODEM 等独占通道的会话使用) */
 void iap_term_set_mute(bool mute)
 {
+    log_hook_install();
     s_term_mute = mute;
 }
 
