@@ -130,7 +130,7 @@ def build_data(cfg: dict) -> bytes:
     """构造 iap_cfg_data_t (612 字节)。
 
     偏移表 (见 iap_common.h 注释):
-        flags(4)@0, wait_seconds(2)@4, reserved0(2)@6,
+        flags(4)@0, wait_seconds(2)@4, boot_fail_count(2)@6,
         user_app_size(4)@8, user_app_crc32(4)@12, user_app_version(4)@16,
         boot_count(4)@20, last_boot_reason(4)@24,
         i2c_scl_gpio(1)@28, i2c_sda_gpio(1)@29, i2c_addr(1)@30,

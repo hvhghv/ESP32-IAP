@@ -374,7 +374,24 @@ typedef struct __attribute__((packed)) {
 
     /* --- 启动等待 --- */
     uint16_t wait_seconds;              /*!< 进入 IAP 后等待秒数，0 表示不等待 */
-    uint16_t reserved0;
+    /*
+     * 连续启动用户程序失败次数 (防砖计数器)。
+     *
+     * 语义:
+     *   IAP 每次准备启动用户程序前 +1，并把它写回配置区。
+     *   若用户程序成功运行，它应调用 iap_config_clear_boot_fail()
+     *   清零 (可选；不调用则下次进 IAP 时由 IAP 判定)。
+     *
+     *   IAP 启动时若发现该值 > IAP_BOOT_MAX_RETRY，说明之前多次
+     *   尝试启动都失败 (bootloader 校验不通过而回落 IAP)，
+     *   此时**不再尝试启动**，直接停在下载模式，避免无限重启循环。
+     *
+     * 为什么不用 RTC RAM 的 reboot_counter:
+     *   bootloader 超限后会调用 bootloader_common_reset_rtc_retain_mem()
+     *   清零整个 RTC RAM (含 custom 区)，IAP 侧读到的计数恒为 0，
+     *   无法据此判断。配置区在 flash 中，不受 RTC RAM 复位影响。
+     */
+    uint16_t boot_fail_count;
 
     /* --- 用户程序信息 (由 IAP 或用户程序更新) --- */
     uint32_t user_app_size;             /*!< 用户程序镜像长度 (字节)，0 表示未知 */
@@ -475,7 +492,7 @@ typedef struct __attribute__((packed)) {
  * 编译期检查: 配置数据结构必须能放入配置槽。
  *
  * 布局 (总长 612 字节):
- *   flags(4) off=0, wait_seconds(2) off=4, reserved0(2) off=6,
+ *   flags(4) off=0, wait_seconds(2) off=4, boot_fail_count(2) off=6,
  *   user_app_size(4) off=8, user_app_crc32(4) off=12, user_app_version(4) off=16,
  *   boot_count(4) off=20, last_boot_reason(4) off=24,
  *   i2c_scl_gpio(1) off=28, i2c_sda_gpio(1) off=29, i2c_addr(1) off=30,

@@ -787,6 +787,17 @@ static void cmd_app_info(void)
         term_printf("已记录长度   : %" PRIu32 " 字节\r\n", info.image_size);
         term_printf("已记录 CRC32 : 0x%08" PRIx32 "\r\n", info.image_crc32);
     }
+    /*
+     * 连续启动失败计数: 达到上限时 IAP 会停止自动启动 (防砖)。
+     * 用户重新烧录正确的用户程序后可用 app clearfail 清零。
+     */
+    uint16_t fails = iap_config_get_boot_fail();
+    if (fails > 0) {
+        term_printf("连续启动失败 : %u 次%s\r\n", (unsigned)fails,
+                    fails > IAP_BOOT_MAX_RETRY
+                        ? " (已超限，自动启动已停止；app clearfail 可清零)"
+                        : "");
+    }
     term_puts("说明         : 镜像完整性由 bootloader 启动时校验\r\n");
     term_puts("========================\r\n\r\n");
 }
@@ -801,6 +812,25 @@ static void cmd_app_erase(void)
     } else {
         term_printf("擦除失败: %s\r\n", esp_err_to_name(err));
     }
+}
+
+/**
+ * @brief 清零连续启动失败计数 (app clearfail)
+ *
+ * 用途:
+ *   用户程序反复启动失败时 IAP 会停止自动启动并停在下载模式
+ *   (防止无限重启)。重新烧录正确的用户程序后，可用本命令
+ *   清除计数，让设备恢复自动启动。
+ */
+static void cmd_app_clearfail(void)
+{
+    uint16_t before = iap_config_get_boot_fail();
+    esp_err_t err = iap_config_clear_boot_fail();
+    if (err != ESP_OK) {
+        term_printf("清零失败: %s\r\n", esp_err_to_name(err));
+        return;
+    }
+    term_printf("连续启动失败计数已清零 (原值 %u)\r\n", (unsigned)before);
 }
 
 static void cmd_app_boot(void)
@@ -1498,6 +1528,7 @@ static void print_help(void)
     term_puts("app info                      显示用户程序信息 (当前活动槽)\r\n");
     term_puts("app list                      列出所有 OTA 槽\r\n");
     term_puts("app erase [n]                 擦除用户程序区 (指定槽或当前槽)\r\n");
+    term_puts("app clearfail                 清零连续启动失败计数 (防砖解锁)\r\n");
     term_puts("app boot [n]                  重启进入用户程序 (指定槽或当前槽)\r\n");
     term_puts("app gpio <引脚号|off>         设置 GPIO 选择 OTA 槽\r\n");
     term_puts("iap boot                      重启进入 IAP\r\n");
@@ -1577,7 +1608,7 @@ static void exec_line(char *line)
         cmd_bootparam(argc, argv);
     } else if (strcmp(cmd, "app") == 0) {
         if (argc < 2) {
-            term_puts("用法: app [info|list|erase [n]|boot [n]|gpio <n|off>]\r\n");
+            term_puts("用法: app [info|list|erase [n]|boot [n]|gpio <n|off>|clearfail]\r\n");
         } else if (strcmp(argv[1], "info") == 0) {
             cmd_app_info();
         } else if (strcmp(argv[1], "list") == 0) {
@@ -1596,6 +1627,8 @@ static void exec_line(char *line)
             }
         } else if (strcmp(argv[1], "gpio") == 0) {
             cmd_app_gpio(argc, argv);
+        } else if (strcmp(argv[1], "clearfail") == 0) {
+            cmd_app_clearfail();
         } else {
             term_puts("未知子命令\r\n");
         }
