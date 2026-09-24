@@ -43,10 +43,13 @@ name: Build IAP Firmware
 #   esp32    完整支持（WiFi + I2C 从机）
 #   esp32s2  完整支持
 #   esp32s3  完整支持
-#   esp32c2  无 I2C 从机（SOC_I2C_SUPPORT_SLAVE=0），其余功能正常
 #   esp32c3  完整支持
 #   esp32c6  完整支持
 #   esp32h2  无 WiFi（SOC_WIFI_SUPPORTED=0），其余功能正常
+#
+# 不支持:
+#   esp32c2  无 RTC FAST RAM (SOC_RTC_FAST_MEM_SUPPORTED=0)，
+#            无法用 RTC 保留内存传递启动参数 (见 main/iap_boot_param.h)
 # ============================================================================
 
 on:
@@ -93,12 +96,12 @@ jobs:
       - name: Determine target list
         id: set
         run: |
-          ALL='["esp32","esp32s2","esp32s3","esp32c2","esp32c3","esp32c6","esp32h2"]'
+          ALL='["esp32","esp32s2","esp32s3","esp32c3","esp32c6","esp32h2"]'
           INPUT='${{ inputs.targets }}'
 
           if [ -z "$INPUT" ]; then
             echo "targets=$ALL" >> $GITHUB_OUTPUT
-            echo "构建全部 7 个目标"
+            echo "构建全部 6 个目标"
           else
             JSON=$(echo "$INPUT" | tr -d ' ' | awk -F, \
               '{printf "["; for(i=1;i<=NF;i++){printf "\"%s\"", $i; if(i<NF) printf ","}; printf "]"}')
@@ -272,7 +275,7 @@ jobs:
         run: |
           set -e
           mkdir -p build-root
-          for t in esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c5 esp32c6 esp32h2; do
+          for t in esp32 esp32s2 esp32s3 esp32c3 esp32c5 esp32c6 esp32h2; do
             boot="all-artifacts/bootloader_${t}.bin"
             app="all-artifacts/esp_iap_${t}.bin"
             pt="all-artifacts/partition-table_${t}.bin"
