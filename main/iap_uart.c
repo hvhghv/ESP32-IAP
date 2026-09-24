@@ -45,6 +45,7 @@
 #include "iap_config.h"
 #include "iap_image.h"
 #include "iap_xmodem.h"
+#include "iap_boot_param.h"     /* IAP_BOOT_MAX_RETRY (防砖计数上限) */
 #include "iap_uart.h"
 
 static const char *TAG = "iap_term";
