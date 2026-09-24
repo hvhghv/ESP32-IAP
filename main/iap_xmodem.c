@@ -179,6 +179,54 @@ static uint8_t xm_wait_start(iap_xmodem_ctx_t *ctx, size_t *out_len)
  * @param data_len 输出有效数据长度
  * @return ESP_OK 成功
  */
+/**
+ * @brief 循环读取直到读满 len 字节
+ *
+ * ⚠️ 必须循环, 不能依赖单次 read 读满。
+ *
+ * 底层介质 (USB-Serial-JTAG / UART) 都有硬件 FIFO 与分包限制,
+ * 单次 read 常常**短读** (例如 USB-Serial-JTAG 一次最多 64 字节,
+ * 而 XMODEM-1K 包体为 1024 字节)。若按「一次读满」判断,
+ * 会永远读不满而超时, 表现为「握手成功但一发数据就失败」。
+ *
+ * @param ctx       协议上下文
+ * @param buf       输出缓冲区
+ * @param len       需要读取的总长度
+ * @param timeout_ms 单次读取的超时 (毫秒)
+ * @return ESP_OK 读满
+ *         ESP_ERR_INVALID_STATE 被取消
+ *         ESP_ERR_TIMEOUT 超时
+ */
+static esp_err_t xm_read_exact(iap_xmodem_ctx_t *ctx, uint8_t *buf,
+                               size_t len, uint32_t timeout_ms)
+{
+    size_t got = 0;
+    uint32_t last_progress = xTaskGetTickCount();
+
+    while (got < len) {
+        if (xm_cancelled(ctx)) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        int n = ctx->read(ctx->user, buf + got, len - got, timeout_ms);
+        if (n < 0) {
+            return ESP_ERR_INVALID_STATE;   /* 介质层报告取消 */
+        }
+        if (n > 0) {
+            got += (size_t)n;
+            last_progress = xTaskGetTickCount();
+            continue;
+        }
+
+        /* 本次无数据: 若长时间无进展则超时 */
+        if (xTaskGetTickCount() - last_progress >
+            pdMS_TO_TICKS(XM_PACKET_TIMEOUT)) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *data_len)
 {
     size_t pkt_len = 0;
@@ -204,10 +252,13 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
 
     esp_err_t err = ESP_OK;
 
-    /* 读取序号、反序号、数据、CRC */
+    /* 读取序号、反序号、数据、CRC (均循环读满, 容忍介质短读) */
     uint8_t hdr[2];
-    if (ctx->read(ctx->user, hdr, 2, XM_PACKET_TIMEOUT) != 2) {
-        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+    err = xm_read_exact(ctx, hdr, 2, XM_PACKET_TIMEOUT);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_TIMEOUT && xm_cancelled(ctx)) {
+            err = ESP_ERR_INVALID_STATE;
+        }
         goto done;
     }
 
@@ -220,14 +271,20 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
         goto done;
     }
 
-    if (ctx->read(ctx->user, data, pkt_len, XM_PACKET_TIMEOUT) != (int)pkt_len) {
-        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+    err = xm_read_exact(ctx, data, pkt_len, XM_PACKET_TIMEOUT);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_TIMEOUT && xm_cancelled(ctx)) {
+            err = ESP_ERR_INVALID_STATE;
+        }
         goto done;
     }
 
     uint8_t crc_bytes[2];
-    if (ctx->read(ctx->user, crc_bytes, 2, XM_PACKET_TIMEOUT) != 2) {
-        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+    err = xm_read_exact(ctx, crc_bytes, 2, XM_PACKET_TIMEOUT);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_TIMEOUT && xm_cancelled(ctx)) {
+            err = ESP_ERR_INVALID_STATE;
+        }
         goto done;
     }
 
