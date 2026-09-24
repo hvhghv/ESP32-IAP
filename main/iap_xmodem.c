@@ -194,10 +194,21 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
         return ESP_ERR_NOT_FINISHED;
     }
 
+    /*
+     * 进入二进制数据阶段: 后续字节是序号/包体/CRC，可能包含任意值
+     * (含 0x03)。必须通知介质层停止 Ctrl+C 检测，否则固件镜像中的
+     * 0x03 会被误判为取消请求而中断传输。
+     */
+    ctx->raw_mode = true;
+    iap_uart_xmodem_set_raw_mode(true);
+
+    esp_err_t err = ESP_OK;
+
     /* 读取序号、反序号、数据、CRC */
     uint8_t hdr[2];
     if (ctx->read(ctx->user, hdr, 2, XM_PACKET_TIMEOUT) != 2) {
-        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        goto done;
     }
 
     uint8_t seq  = hdr[0];
@@ -205,16 +216,19 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
 
     if ((uint8_t)(seq + nseq) != 0xFF) {
         ESP_LOGW(TAG, "序号校验失败: seq=%u nseq=%u", seq, nseq);
-        return ESP_ERR_INVALID_CRC;
+        err = ESP_ERR_INVALID_CRC;
+        goto done;
     }
 
     if (ctx->read(ctx->user, data, pkt_len, XM_PACKET_TIMEOUT) != (int)pkt_len) {
-        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        goto done;
     }
 
     uint8_t crc_bytes[2];
     if (ctx->read(ctx->user, crc_bytes, 2, XM_PACKET_TIMEOUT) != 2) {
-        return xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        err = xm_cancelled(ctx) ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
+        goto done;
     }
 
     uint16_t crc_recv = (uint16_t)((crc_bytes[0] << 8) | crc_bytes[1]);
@@ -222,12 +236,18 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
 
     if (crc_recv != crc_calc) {
         ESP_LOGW(TAG, "CRC 错误: recv=0x%04X calc=0x%04X", crc_recv, crc_calc);
-        return ESP_ERR_INVALID_CRC;
+        err = ESP_ERR_INVALID_CRC;
+        goto done;
     }
 
     ctx->last_seq = seq;
     *data_len = pkt_len;
-    return ESP_OK;
+
+done:
+    /* 退出二进制阶段: 恢复 Ctrl+C 检测 (等待下一个包起始字符时用) */
+    ctx->raw_mode = false;
+    iap_uart_xmodem_set_raw_mode(false);
+    return err;
 }
 
 esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
@@ -251,6 +271,10 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
     bool finished = false;
     bool pending_packet = false;   /* 握手阶段已收到第 1 包 */
     size_t pend_len = 0;           /* 待处理包的有效数据长度 */
+
+    /* 初始为控制字符阶段: 允许介质层检测 Ctrl+C */
+    ctx->raw_mode = false;
+    iap_uart_xmodem_set_raw_mode(false);
 
     ESP_LOGI(TAG, "开始 XMODEM 接收，等待发送方...");
 
@@ -474,6 +498,9 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
     ESP_LOGI(TAG, "XMODEM 接收完成，共 %" PRIu32 " 字节", total_bytes);
 
 out:
+    /* 退出时务必恢复: 否则终端后续输入中的 0x03 会被误判 */
+    ctx->raw_mode = false;
+    iap_uart_xmodem_set_raw_mode(false);
     free(pkt_buf);
     return result;
 }
@@ -567,6 +594,13 @@ esp_err_t iap_xmodem_send(iap_xmodem_ctx_t *ctx,
     }
 
     esp_err_t result = ESP_OK;
+
+    /*
+     * 发送方向只读**单字节响应** (ACK/NAK/CAN)，均属控制字符阶段，
+     * 因此全程允许介质层检测 Ctrl+C (raw_mode = false)。
+     */
+    ctx->raw_mode = false;
+    iap_uart_xmodem_set_raw_mode(false);
 
     /* 握手: 等待接收方发送 'C' 或 NAK */
     ESP_LOGI(TAG, "等待接收方握手...");

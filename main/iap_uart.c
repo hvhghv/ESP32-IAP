@@ -943,10 +943,27 @@ static esp_err_t xm_on_read_raw(void *user, uint8_t *buf, uint32_t offset, size_
  *   = 0  超时 (无数据)
  *   < 0  已取消 (检测到 Ctrl+C)
  *
- * 注意: 取消时**必须返回负值**而非 0 —— 若返回 0，调用方只会当作
- *       普通超时而继续等待，导致 Ctrl+C 在握手阶段「不生效」。
- *       即使是同批到达的 Ctrl+C + 其它字节，也以取消优先。
+ * ⚠️⚠️ 关键: **仅在非数据阶段检测 0x03**。
+ *
+ *   XMODEM 包体是任意二进制，固件镜像中 0x03 极为常见。
+ *   若在数据阶段也扫描 0x03，会被误判为取消请求，
+ *   导致「握手正常但一发数据就中断」。
+ *
+ *   协议层通过 ctx->raw_mode 告知当前是否在读二进制数据:
+ *     raw_mode == false → 握手/等待控制字符, 检测 0x03
+ *     raw_mode == true  → 读包体/序号/CRC, 不检测
+ *
+ *   本回调的 user 是 uart_port_t*, 无法直接访问 ctx,
+ *   故由协议层在切换阶段时调用 iap_uart_xmodem_set_raw_mode() 通知。
  */
+static volatile bool s_xm_raw_mode = false;
+
+/** 由 XMODEM 协议层调用: 标记当前是否处于二进制数据读取阶段 */
+void iap_uart_xmodem_set_raw_mode(bool raw)
+{
+    s_xm_raw_mode = raw;
+}
+
 static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_ms)
 {
     uart_port_t port = *(uart_port_t *)user;
@@ -955,7 +972,12 @@ static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_m
         return 0;
     }
 
-    /* 扫描 Ctrl+C (0x03): 置位取消标志并立即返回负值 */
+    /* 数据阶段: 原样返回, 绝不扫描 0x03 */
+    if (s_xm_raw_mode) {
+        return n;
+    }
+
+    /* 握手/控制字符阶段: 扫描 Ctrl+C, 命中则立即返回负值 */
     for (int i = 0; i < n; i++) {
         if (buf[i] == 0x03) {
             s_cancel = true;

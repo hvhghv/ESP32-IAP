@@ -74,6 +74,20 @@ typedef struct {
 
     volatile bool        *cancel_flag;  /*!< 指向取消标志，可为 NULL */
 
+    /*
+     * 数据阶段标志 (由协议层维护, 读回调只读)。
+     *
+     * 置位表示当前正在读取**二进制数据** (包体/序号/CRC)，
+     * 这些字节可能是任意值 —— 包括 0x03。
+     *
+     * ⚠️ 读回调**必须**据此跳过 Ctrl+C 检测:
+     *    否则固件镜像中出现的 0x03 会被误判为取消请求，
+     *    导致传输中途被中断 (现象: 握手正常但一发数据就停)。
+     *
+     * 仅在握手/等待控制字符阶段 (raw_mode == false) 才检测 0x03。
+     */
+    volatile bool         raw_mode;
+
     /* --- 以下为运行时输出 --- */
     uint8_t  last_seq;                  /*!< 最近收到的包序号 */
     uint32_t total_bytes;               /*!< 累计传输字节数 */
@@ -98,6 +112,20 @@ typedef struct {
 esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
                              iap_xmodem_data_cb_t on_data,
                              void *user);
+
+/**
+ * @brief 通知底层介质「当前是否在读二进制数据」(可选实现)
+ *
+ * 介质层 (如 UART) 若在读回调中做 Ctrl+C 检测，**必须**实现本函数，
+ * 并在 raw==true 时跳过检测 —— 否则固件镜像中的 0x03 会被误判为取消。
+ *
+ * 协议层在读取包体/序号/CRC 前调用 raw=true，读完恢复 raw=false。
+ * 未实现时提供空实现即可 (弱符号)。
+ *
+ * @param raw true = 二进制数据阶段 (不检测 Ctrl+C)
+ *            false = 握手/控制字符阶段 (可检测 Ctrl+C)
+ */
+void iap_uart_xmodem_set_raw_mode(bool raw);
 
 /**
  * @brief 以 XMODEM 协议发送文件
