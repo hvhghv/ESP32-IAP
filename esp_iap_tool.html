@@ -661,6 +661,11 @@
         <span class="t-dim">两者都会释放串口，便于其他工具（如串口助手）接管。</span>
       </div>
       <div class="hint">
+        <b>擦除用户程序区</b>：擦除范围 <code>0x140000</code> ~ 用户程序区末尾
+        （含分区表 B、nvs 与 user_app 镜像），与 <code>user.bin</code> 的烧录范围对称。<br>
+        <b>查询用户程序信息</b> / <b>启动用户程序</b>：通过 IAP 终端命令操作。
+      </div>
+      <div class="hint">
         <b>救援进入 IAP</b>（已取消 flash 标志区，v5）：上电时按住 <b>BOOT 键 (GPIO0)</b>，
         或在启动等待窗口内向串口发送 <code>iap</code> 字符串（不带参数）。
       </div>
@@ -5339,13 +5344,31 @@ async function eraseUserApp() {
   const method = "flash";
 
   if (method === "flash") {
-    // 用 esptool 擦除 user_app 分区 (地址/大小来自分区表 B)
+    // 用 esptool 擦除用户程序区 (地址/大小来自分区表 B)
     if (!FLASHER.connected) { showStatus("请先连接设备", "err"); return; }
     const ua = resolveUserAppPart();
+
+    /*
+     * 擦除范围对齐到「可变区」起点 0x140000。
+     *
+     * 布局:  0x140000 分区表 B (4KB) │ 0x141000 nvs (12KB) │ 0x150000 user_app
+     *
+     * user_app 分区本身从 0x150000 开始，但 user.bin 是**从 0x140000
+     * 整段写入**的（含分区表 B）。若只擦 0x150000 起，会残留旧分区表 B
+     * 与 nvs，导致下次烧录前设备仍能"看到"半旧的用户程序布局。
+     *
+     * 因此擦除起点回退到分区表 B 的位置，与烧录范围对称。
+     */
+    const eraseOffset = Math.min(ua.offset, PARTITION_TABLE_B_OFFSET);
+    const eraseSize = ua.offset - eraseOffset + ua.size;
+
     if (!confirm(
-      "即将擦除 user_app 分区 (" + hex32(ua.offset) + ", " +
-      (ua.size / 1024).toFixed(0) + " KB)。\n" +
+      "即将擦除用户程序区 (" + hex32(eraseOffset) + ", " +
+      (eraseSize / 1024).toFixed(0) + " KB)。\n" +
       "来源: " + ua.source + "\n\n" +
+      "范围: " + hex32(eraseOffset) + " ~ " + hex32(eraseOffset + eraseSize) + "\n" +
+      "  含分区表 B (" + hex32(PARTITION_TABLE_B_OFFSET) + ") 与 user_app (" +
+      hex32(ua.offset) + ")\n\n" +
       "设备上已有的用户程序将被清除。确认继续？"
     )) return;
 
@@ -5354,18 +5377,18 @@ async function eraseUserApp() {
     appTermClear();
     appHideProgress();
     try {
-      appTermWrite("正在擦除 user_app 分区 " + hex32(ua.offset) +
-                   " (" + (ua.size / 1024).toFixed(0) + " KB) ...", "t-info");
-      await FLASHER.loader.eraseRegion(ua.offset, ua.size);
+      appTermWrite("正在擦除用户程序区 " + hex32(eraseOffset) +
+                   " (" + (eraseSize / 1024).toFixed(0) + " KB) ...", "t-info");
+      await FLASHER.loader.eraseRegion(eraseOffset, eraseSize);
       appTermWrite("擦除完成", "t-ok");
       showStatus("用户程序区已擦除", "ok");
     } catch (err) {
       // 回退：写入全 0xFF
       appTermWrite("eraseRegion 不可用，改用写入 0xFF: " + (err.message || err), "t-warn");
       try {
-        const blank = new Uint8Array(ua.size).fill(0xFF);
+        const blank = new Uint8Array(eraseSize).fill(0xFF);
         await FLASHER.loader.writeFlash({
-          fileArray: [{ data: blank, address: ua.offset }],
+          fileArray: [{ data: blank, address: eraseOffset }],
           flashMode: "dio", flashFreq: "80m",
           flashSize: flashSizeForEsptool(),
           eraseAll: false, compress: true,
@@ -5387,7 +5410,13 @@ async function eraseUserApp() {
 
   // XMODEM 方式：用设备终端命令
   if (!FLASHER.port) { showStatus("请先连接设备", "err"); return; }
-  if (!confirm("即将擦除 user_app 分区。\n\n设备上已有的用户程序将被清除。确认继续？")) return;
+  if (!confirm(
+    "即将擦除 user_app 分区（设备端 app erase 命令）。\n\n" +
+    "范围: " + hex32(USER_APP_ADDR) + " 起的应用镜像分区\n" +
+    "注意: 设备端命令只擦自己的槽分区，不含分区表 B (" +
+    hex32(PARTITION_TABLE_B_OFFSET) + ")。\n\n" +
+    "设备上已有的用户程序将被清除。确认继续？"
+  )) return;
 
   APPFLASH.busy = true;
   setFlashButtons(false);

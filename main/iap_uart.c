@@ -760,6 +760,43 @@ static void cmd_bootparam(int argc, char **argv)
 /* 命令实现: 用户程序                                                          */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * @brief 擦除进度回调 (供 iap_image_slot_erase 调用)
+ *
+ * 大分区擦除耗时可达十几秒。按 256KB 分块, 每块完成后打印一次
+ * 百分比进度, 避免用户误以为命令卡死。
+ *
+ * 输出形如:
+ *   擦除中...  25% (720896/2818048)
+ * 为减少刷屏, 仅在百分比整数变化时输出。
+ *
+ * @param done  已擦除字节数
+ * @param total 总字节数
+ */
+static void erase_progress_print(uint32_t done, uint32_t total)
+{
+    if (total == 0) {
+        return;
+    }
+
+    static uint32_t last_pct = 0xFFFFFFFFu;
+
+    uint32_t pct = (uint32_t)((uint64_t)done * 100u / total);
+    if (pct == last_pct) {
+        return;
+    }
+    last_pct = pct;
+
+    if (done >= total) {
+        last_pct = 0xFFFFFFFFu;   /* 复位, 供下次擦除使用 */
+        term_printf("\r擦除中... 100%% (%" PRIu32 "/%" PRIu32 ")\r\n",
+                    done, total);
+    } else {
+        term_printf("\r擦除中... %3" PRIu32 "%% (%" PRIu32 "/%" PRIu32 ")",
+                    pct, done, total);
+    }
+}
+
 static void cmd_app_info(void)
 {
     iap_image_info_t info;
@@ -807,7 +844,7 @@ static void cmd_app_erase(void)
 {
     uint8_t slot = iap_image_get_active_slot();
     term_printf("正在擦除 OTA 槽 %u...\r\n", (unsigned)slot);
-    esp_err_t err = iap_image_slot_erase(slot, 0);
+    esp_err_t err = iap_image_slot_erase(slot, 0, erase_progress_print);
     if (err == ESP_OK) {
         term_puts("擦除完成\r\n");
     } else {
@@ -917,7 +954,8 @@ static void cmd_app_erase_n(uint32_t slot)
     }
 
     term_printf("正在擦除 OTA 槽 %u...\r\n", (unsigned)slot);
-    esp_err_t err = iap_image_slot_erase((uint8_t)slot, 0);
+    esp_err_t err = iap_image_slot_erase((uint8_t)slot, 0,
+                                         erase_progress_print);
     if (err == ESP_OK) {
         term_puts("擦除完成\r\n");
     } else {

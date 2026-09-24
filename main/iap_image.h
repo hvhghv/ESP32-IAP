@@ -163,13 +163,28 @@ uint8_t iap_image_slot_from_gpio(void);
 bool iap_image_slot_present(uint8_t slot);
 
 /**
+ * @brief 擦除进度回调
+ *
+ * @param done  已擦除字节数
+ * @param total 总字节数
+ *
+ * 大分区 (如 2.7MB 用户程序区) 擦除耗时可达十几秒, 期间若不输出
+ * 进度, 用户会误以为命令卡死。回调由调用方 (终端层) 决定如何展示。
+ */
+typedef void (*iap_image_progress_fn_t)(uint32_t done, uint32_t total);
+
+/**
  * @brief 擦除指定 OTA 槽
  *
- * @param slot 槽序号
- * @param size 擦除长度，0 或超范围时擦除整个分区
+ * 内部按扇区分块擦除, 每块完成后调用 progress (可为 NULL)。
+ *
+ * @param slot     槽序号
+ * @param size     擦除长度，0 或超范围时擦除整个分区
+ * @param progress 进度回调, 可为 NULL
  * @return ESP_OK 成功
  */
-esp_err_t iap_image_slot_erase(uint8_t slot, uint32_t size);
+esp_err_t iap_image_slot_erase(uint8_t slot, uint32_t size,
+                               iap_image_progress_fn_t progress);
 
 /**
  * @brief 向指定 OTA 槽写入数据

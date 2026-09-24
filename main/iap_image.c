@@ -642,10 +642,21 @@ bool iap_image_slot_present(uint8_t slot)
 
 esp_err_t iap_image_erase(uint32_t size)
 {
-    return iap_image_slot_erase(s_active_slot, size);
+    return iap_image_slot_erase(s_active_slot, size, NULL);
 }
 
-esp_err_t iap_image_slot_erase(uint8_t slot, uint32_t size)
+/*
+ * 单次擦除的分块大小。
+ *
+ * esp_partition_erase_range 一次性擦除 2.7MB 需十几秒且无任何输出,
+ * 用户会误以为卡死。改为按块擦除并在块间回调进度。
+ * 取 256KB: 对 2.7MB 分区约 11 块, 进度刷新足够细腻,
+ * 又不会因回调过于频繁而拖慢整体速度。
+ */
+#define IAP_ERASE_CHUNK_BYTES   (256u * 1024u)
+
+esp_err_t iap_image_slot_erase(uint8_t slot, uint32_t size,
+                               iap_image_progress_fn_t progress)
 {
     const esp_partition_t *p = iap_image_get_slot(slot);
     if (p == NULL) {
@@ -664,11 +675,29 @@ esp_err_t iap_image_slot_erase(uint8_t slot, uint32_t size)
 
     ESP_LOGI(TAG, "擦除 OTA 槽 %u %" PRIu32 " 字节...",
              (unsigned)slot, erase_size);
-    esp_err_t err = esp_partition_erase_range(p, 0, erase_size);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "擦除失败: %s", esp_err_to_name(err));
+
+    /* 分块擦除, 每块完成后回调进度 */
+    uint32_t done = 0;
+    while (done < erase_size) {
+        uint32_t chunk = erase_size - done;
+        if (chunk > IAP_ERASE_CHUNK_BYTES) {
+            chunk = IAP_ERASE_CHUNK_BYTES;
+        }
+
+        esp_err_t err = esp_partition_erase_range(p, done, chunk);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "擦除失败 @0x%" PRIx32 ": %s",
+                     done, esp_err_to_name(err));
+            return err;
+        }
+
+        done += chunk;
+        if (progress != NULL) {
+            progress(done, erase_size);
+        }
     }
-    return err;
+
+    return ESP_OK;
 }
 
 esp_err_t iap_image_write(uint32_t offset, const void *data, size_t len)
