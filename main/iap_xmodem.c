@@ -41,8 +41,22 @@ static const char *TAG = "xmodem";
 
 /* 时序参数 */
 #define XM_RETRY_MAX        10      /*!< 单包最大重试次数 */
-#define XM_HANDSHAKE_SEC    90      /*!< 握手等待超时 (秒) */
+#define XM_HANDSHAKE_SEC    90      /*!< 握手总超时 (秒) */
 #define XM_PACKET_TIMEOUT   3000    /*!< 单包接收超时 (毫秒) */
+
+/*
+ * 握手字符重发间隔 (毫秒)。
+ *
+ * 标准 XMODEM 要求接收方**周期性重发 'C'** (通常每 1~3 秒),
+ * 直到收到数据包为止。原因:
+ *   1. 发送方可能在接收方发出首个 'C' 之前就已启动, 错过该字符;
+ *   2. 接收方的提示文本/日志可能与 'C' 混在一起, 发送方需要
+ *      后续干净的 'C' 才能可靠同步;
+ *   3. 线路噪声可能吞掉个别字符。
+ *
+ * 若只在开始时发一次 'C', 发送方错过即需等待整个握手超时。
+ */
+#define XM_HANDSHAKE_RESEND_MS  1000
 
 /*
  * 无进展超时 (秒): 连续这么久没有成功收到/发出任何数据包则放弃。
@@ -140,16 +154,25 @@ static uint8_t xm_wait_start(iap_xmodem_ctx_t *ctx, size_t *out_len)
             return XM_WAIT_CANCELLED;
         }
 
-        if (xTaskGetTickCount() - start > pdMS_TO_TICKS(XM_HANDSHAKE_SEC * 1000)) {
+        /*
+         * 等待单个包起始字符的超时。
+         *
+         * 用 XM_HANDSHAKE_RESEND_MS (而非整个握手时长) 作为上限:
+         * 超时后返回 0, 由外层重发 'C' 并重新进入本函数。
+         * 这样既实现了标准要求的周期性重发, 又不会因一次
+         * 长时间无数据而卡死 90 秒。
+         */
+        if (xTaskGetTickCount() - start >
+            pdMS_TO_TICKS(XM_HANDSHAKE_RESEND_MS)) {
             return 0;
         }
 
-        int r = xm_get_byte(ctx, &c, 1000);
+        int r = xm_get_byte(ctx, &c, 200);
         if (r < 0) {
             return XM_WAIT_CANCELLED;   /* read 回调报告取消 */
         }
         if (r == 0) {
-            continue;                   /* 超时: 回到循环顶部重新检查取消 */
+            continue;                   /* 超时: 回到循环顶部重新检查 */
         }
 
         if (c == XM_SOH) {
@@ -335,11 +358,23 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
 
     ESP_LOGI(TAG, "开始 XMODEM 接收，等待发送方...");
 
-    /* 握手: 发送 'C' 请求 CRC 模式 */
-    int handshake_retry = 0;
+    /*
+     * 握手: 周期性发送 'C' 请求 CRC 模式 (标准 XMODEM 行为)。
+     *
+     * 每轮: 发 'C' → 等最多 XM_HANDSHAKE_RESEND_MS 毫秒 →
+     *       未收到包起始字符则重发。总时长不超过 XM_HANDSHAKE_SEC。
+     */
+    uint32_t hs_start = xTaskGetTickCount();
     while (!got_first) {
         if (xm_cancelled(ctx)) {
             result = ESP_ERR_INVALID_STATE;
+            goto out;
+        }
+
+        if (xTaskGetTickCount() - hs_start >
+            pdMS_TO_TICKS(XM_HANDSHAKE_SEC * 1000)) {
+            ESP_LOGE(TAG, "握手超时 (%d 秒)", XM_HANDSHAKE_SEC);
+            result = ESP_ERR_TIMEOUT;
             goto out;
         }
 
@@ -363,11 +398,10 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
         }
 
         if (err != ESP_OK) {
-            if (++handshake_retry > XM_HANDSHAKE_SEC) {
-                ESP_LOGE(TAG, "握手超时");
-                result = ESP_ERR_TIMEOUT;
-                goto out;
-            }
+            /*
+             * 未收到有效包起始字符 (超时或校验错误):
+             * 回到循环顶部重发 'C'。总时长由 hs_start 控制。
+             */
             continue;
         }
 
