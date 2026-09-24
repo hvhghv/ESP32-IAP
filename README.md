@@ -2726,20 +2726,23 @@ prepare ──→ build (7 芯片矩阵) ──→ embed-bootloader ──→ su
    └─ 解析目标列表（支持手动指定子集）
 ```
 
-**产物**（每个芯片）：
+**产物**（每个芯片**只发布一个烧录文件**）：
 
 | 文件 | 说明 |
 |------|------|
-| `iap_side_<chip>.bin` | **IAP 烧录文件**（1280KB 整片，含 bootloader + 配置区 + 分区表 A + IAP） |
-| `user_<chip>.bin` | 用户程序（可选，来自 `examples/user_app_template`） |
-| `esp_iap_<chip>.bin` | IAP 应用（单独） |
-| `esp_iap_<chip>.elf` | 带调试符号 |
-| `bootloader_<chip>.bin` | 引导程序（同时用于生成 HTML 内置数据） |
-| `partition-table_<chip>.bin` | 分区表 A |
-| `MANIFEST_<chip>.txt` | 产物清单（大小 + SHA256） |
+| `iap_side_<chip>.bin` | ★ **唯一烧录文件**（1280KB 整片，含 bootloader + 配置区 + 分区表 A + IAP） |
+| `MANIFEST_<chip>.txt` | 清单（大小 + SHA256） |
+| `user_<chip>.bin` | 用户程序（可选，来自 `examples/user_app_template`，单独烧到 `0x140000`） |
 
-`embed-bootloader` 任务：把各芯片的 `bootloader.bin` 重新编码为 Base64 写入
-`esp_iap_tool.html`，并用 `gen_boot_embed.py --check` 校验一致性。
+> **中间产物不再发布**：`esp_iap.bin` / `bootloader.bin` /
+> `partition-table.bin` / `.elf` 都已被 `iap_side.bin` 完整包含，
+> 仅作为内部 artifact（`iap-intermediates-*`，保留 7 天）供
+> `embed-bootloader` 任务切分使用，**不随 Release 发布**，避免使用者误烧。
+
+`embed-bootloader` 任务：用各芯片的 `bootloader.bin` + `esp_iap.bin` +
+`partition-table.bin` 合成完整镜像，重新编码为 Base64 写入
+`esp_iap_builtin.js`（HTML 惰性加载），并用 `gen_boot_embed.py --check`
+校验一致性。
 
 `iap_side_<chip>.bin` 布局：
 

@@ -10,13 +10,13 @@ name: Build IAP Firmware
 #   - 手动触发（可选是否创建 Release）
 #   - 打 tag (v*) 时自动创建 Release
 #
-# 产物（每个芯片一份）:
-#   - iap_side_<chip>.bin            ★ IAP 烧录文件 (1280KB 整片, 0x0)
-#   - esp_iap_<chip>.bin             IAP 应用
-#   - esp_iap_<chip>.elf             带调试符号
-#   - bootloader_<chip>.bin          引导程序
-#   - partition-table_<chip>.bin     分区表 A
-#   - MANIFEST_<chip>.txt            产物清单（大小 + SHA256）
+# 产物（每个芯片**只发布一个烧录文件**）:
+#   - iap_side_<chip>.bin            ★ 唯一烧录文件 (1280KB 整片, @0x0)
+#   - MANIFEST_<chip>.txt            清单（大小 + SHA256）
+#
+#   中间产物 (esp_iap.bin / bootloader.bin / partition-table.bin) 已被
+#   iap_side.bin 完整包含, 仅作为内部 artifact 供 embed-bootloader 任务
+#   切分使用, **不随 Release 发布**, 避免使用者误烧。
 #
 # iap_side_<chip>.bin 布局（固定区整片 0x0 ~ 0x13FFFF）:
 #   0x000000  bootloader
@@ -197,24 +197,28 @@ jobs:
           python tools/test_bootloader_check.py
 
       # 收集产物到统一目录
+      #
+      # 只对外发布**一个**烧录文件: iap_side_<芯片>.bin
+      # (固定区 0x0 ~ 0x13FFFF 整片, 已含 bootloader + 配置区 + 分区表 A + IAP 程序)。
+      # 其余中间产物 (bootloader.bin / esp_iap.bin / partition-table.bin / .elf)
+      # 均已被 iap_side.bin 包含, 不再单独发布, 避免使用者误烧。
       - name: Collect artifacts
         run: |
           set -e
           T="${{ matrix.target }}"
           mkdir -p artifacts
 
-          cp build/${PROJECT_NAME}.bin                       artifacts/${PROJECT_NAME}_${T}.bin
-          cp build/${PROJECT_NAME}.elf                       artifacts/${PROJECT_NAME}_${T}.elf
-          cp build/bootloader/bootloader.bin                 artifacts/bootloader_${T}.bin
+          # ★ 唯一烧录文件
           cp build/iap_side_${T}.bin                         artifacts/
-          cp build/partition_table/partition-table.bin       artifacts/partition-table_${T}.bin
-          cp partitions_iap.csv                              artifacts/partitions_iap.csv
 
-          # 生成产物清单与校验和
+          # 清单 (含校验和, 便于校验下载完整性)
           {
             echo "target: ${T}"
             echo "idf: ${IDF_VERSION}"
             echo "commit: ${GITHUB_SHA}"
+            echo ""
+            echo "烧录文件: iap_side_${T}.bin @ 0x0 (1280KB, 固定区整片)"
+            echo "用户程序: user.bin @ 0x140000 (由用户程序工程自行生成)"
             echo ""
             echo "file,size,sha256"
             for f in artifacts/*.bin; do
@@ -225,6 +229,29 @@ jobs:
           cat artifacts/MANIFEST_${T}.txt
           echo "---"
           ls -la artifacts/
+
+      # 把中间产物也存为 artifact, 仅供 embed-bootloader 任务切分使用
+      # (不随 Release 发布, 使用者无需关心)
+      #
+      # 注意: 必须先重命名成带芯片后缀的扁平文件名 —— 多个芯片的
+      # artifact 会以 merge-multiple 合并到同一目录, 同名文件会互相覆盖。
+      - name: Upload build intermediates
+        run: |
+          set -e
+          T="${{ matrix.target }}"
+          mkdir -p intermediates
+          cp build/bootloader/bootloader.bin            intermediates/bootloader_${T}.bin
+          cp build/${PROJECT_NAME}.bin                  intermediates/${PROJECT_NAME}_${T}.bin
+          cp build/partition_table/partition-table.bin  intermediates/partition-table_${T}.bin
+          ls -la intermediates/
+
+      - name: Upload build intermediates
+        uses: actions/upload-artifact@v4
+        with:
+          name: iap-intermediates-${{ matrix.target }}
+          path: intermediates/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -268,6 +295,15 @@ jobs:
           pattern: iap-firmware-*
           merge-multiple: true
 
+      # 下载中间产物 (bootloader / esp_iap / partition-table)
+      # 仅供 gen_boot_embed.py 切分合成内置镜像, 不对外发布
+      - name: Download build intermediates
+        uses: actions/download-artifact@v4
+        with:
+          path: intermediates
+          pattern: iap-intermediates-*
+          merge-multiple: true
+
       # 按 gen_boot_embed.py 期望的目录结构布置产物
       #   build-root/iap_<chip>/build/bootloader/bootloader.bin
       #   build-root/iap_<chip>/build/esp_iap.bin
@@ -277,9 +313,9 @@ jobs:
           set -e
           mkdir -p build-root
           for t in esp32 esp32s2 esp32s3 esp32c3 esp32c5 esp32c6 esp32h2; do
-            boot="all-artifacts/bootloader_${t}.bin"
-            app="all-artifacts/esp_iap_${t}.bin"
-            pt="all-artifacts/partition-table_${t}.bin"
+            boot="intermediates/bootloader_${t}.bin"
+            app="intermediates/esp_iap_${t}.bin"
+            pt="intermediates/partition-table_${t}.bin"
             [ -f "$boot" ] || { echo "::warning::缺少 bootloader_${t}.bin"; continue; }
             [ -f "$app" ]  || { echo "::warning::缺少 esp_iap_${t}.bin"; continue; }
             [ -f "$pt" ]   || { echo "::warning::缺少 partition-table_${t}.bin"; continue; }
@@ -413,8 +449,10 @@ jobs:
         run: |
           set -e
           mkdir -p release
-          cp all-artifacts/*.bin release/ 2>/dev/null || true
-          cp all-artifacts/*.txt release/ 2>/dev/null || true
+
+          # ★ 唯一的烧录文件: iap_side_<芯片>.bin (每个芯片 1 个)
+          cp all-artifacts/iap_side_*.bin release/
+          cp all-artifacts/MANIFEST_*.txt release/ 2>/dev/null || true
 
           # 配套工具与文档
           cp tools/gen_factory_cfg.py    release/
@@ -425,7 +463,6 @@ jobs:
           cp tools/iap_xmodem_send.py    release/
           cp tools/serve_editor.py       release/
           cp tools/verify_html_editor.py release/
-          cp tools/test_dhcp_strip.py   release/
           cp tools/test_dhcp_strip.py    release/
           cp tools/test_bootloader_check.py release/
           cp tools/test_crc.py           release/
