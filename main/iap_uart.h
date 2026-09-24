@@ -106,6 +106,20 @@ void iap_term_write(const char *s);
 void iap_term_printf(const char *fmt, ...);
 
 /**
+ * @brief 设置终端输出静默
+ *
+ * 置位后 iap_term_write / iap_term_printf (含 ESP_LOG 输出) 全部丢弃。
+ *
+ * ⚠️ XMODEM 等**独占通道**的会话必须使用:
+ *    日志文本会与协议数据混在同一字节流中, 发送方逐字节解析时
+ *    会先读到日志字符而误判, 导致「设备已收包但发送方等不到 ACK」。
+ *    会话结束 (含所有错误路径) 后必须清除, 否则终端不再有任何输出。
+ *
+ * @param mute true 静默, false 恢复
+ */
+void iap_term_set_mute(bool mute);
+
+/**
  * @brief 注册一个终端后端并启动对应的读取任务
  *
  * 每个后端独立一个任务，共享同一套命令表与行缓冲 (各自独立行缓冲)。

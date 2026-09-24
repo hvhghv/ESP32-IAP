@@ -292,14 +292,10 @@ static esp_err_t xm_recv_packet(iap_xmodem_ctx_t *ctx, uint8_t *data, size_t *da
     uint16_t crc_calc = iap_crc16_xmodem(data, pkt_len);
 
     if (crc_recv != crc_calc) {
-        ESP_LOGW(TAG, "CRC 错误: seq=%u recv=0x%04X calc=0x%04X",
-                 seq, crc_recv, crc_calc);
+        ESP_LOGW(TAG, "CRC 错误: recv=0x%04X calc=0x%04X", crc_recv, crc_calc);
         err = ESP_ERR_INVALID_CRC;
         goto done;
     }
-
-    ESP_LOGI(TAG, "[diag] 收到包 seq=%u len=%u (累计 %" PRIu32 ")",
-             seq, (unsigned)pkt_len, ctx->total_bytes);
 
     ctx->last_seq = seq;
     *data_len = pkt_len;
@@ -465,8 +461,6 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
 
         if (err != ESP_OK) {
             /* 出错则请求重传 */
-            ESP_LOGW(TAG, "[diag] 收包失败 (%s)，回 NAK 请求重传",
-                     esp_err_to_name(err));
             xm_put_byte(ctx, XM_NAK);
             continue;
         }
@@ -491,9 +485,7 @@ esp_err_t iap_xmodem_receive(iap_xmodem_ctx_t *ctx,
                 total_bytes += payload;
             }
 
-            if (!xm_put_byte(ctx, XM_ACK)) {
-                ESP_LOGW(TAG, "[diag] ACK 发送失败 (seq=%u)", expected_seq);
-            }
+            xm_put_byte(ctx, XM_ACK);
             expected_seq++;
 
             /* 进度输出 */

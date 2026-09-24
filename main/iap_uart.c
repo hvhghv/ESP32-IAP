@@ -192,11 +192,33 @@ bool iap_term_any_ready(void)
 /* 输出辅助                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/*
+ * 输出静默开关
+ *
+ * XMODEM 传输期间必须**完全静默**终端输出:
+ *   日志与提示文本会与 XMODEM 数据 (ACK/NAK/包体) 混在同一字节流里,
+ *   发送方逐字节解析时会先读到日志字符 (如 'I'、中文 UTF-8 字节),
+ *   判定不是 ACK 而重传, 造成「设备已正确收包但发送方永远等不到 ACK」
+ *   的死循环。
+ *
+ * 用法: XMODEM 会话开始前置位, 结束 (含所有错误路径) 后清除。
+ */
+static volatile bool s_term_mute = false;
+
+/** 设置终端输出静默 (供 XMODEM 等独占通道的会话使用) */
+void iap_term_set_mute(bool mute)
+{
+    s_term_mute = mute;
+}
+
 /**
  * @brief 向所有已注册后端输出字符串
  */
 void iap_term_write(const char *s)
 {
+    if (s_term_mute) {
+        return;
+    }
     size_t len = strlen(s);
     for (int i = 0; i < s_backend_count; i++) {
         if (s_backends[i]->write) {
@@ -210,6 +232,9 @@ void iap_term_write(const char *s)
  */
 void iap_term_printf(const char *fmt, ...)
 {
+    if (s_term_mute) {
+        return;
+    }
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -1060,7 +1085,11 @@ static void cmd_xmodem_recv_var(void)
 
     term_puts("请使用 XMODEM 协议发送镜像文件 (Ctrl+C 取消)...\r\n");
     term_puts("提示: 文件应为 build_user_app.py 打包的 <name>_flash.bin\r\n");
+
+    /* 静默终端输出: 避免日志文本混入 XMODEM 数据流 */
+    iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data_var, &wctx);
+    iap_term_set_mute(false);
 
     if (err != ESP_OK) {
         if (err == ESP_ERR_INVALID_STATE) {
@@ -1171,7 +1200,9 @@ static void cmd_xmodem_recv(uint32_t offset)
     };
 
     term_puts("请使用 XMODEM 协议发送文件 (Ctrl+C 取消)...\r\n");
+    iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data, &wctx);
+    iap_term_set_mute(false);
 
     if (err != ESP_OK) {
         term_printf("\r\n接收失败: %s\r\n", esp_err_to_name(err));
@@ -1254,8 +1285,11 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
                     length / 1024);
         term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
 
+        iap_term_set_mute(true);
         esp_err_t err = iap_xmodem_send(&xctx, "var_region.bin", length,
                                         xm_on_read_raw, &rctx);
+        iap_term_set_mute(false);
+
         if (err == ESP_OK) {
             term_puts("\r\n发送完成\r\n");
         } else if (err == ESP_ERR_INVALID_STATE) {
@@ -1295,7 +1329,10 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
 
     term_printf("开始发送 %" PRIu32 " 字节 (从 0x%" PRIx32 ")...\r\n", length, offset);
     term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
+
+    iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_send(&xctx, "user_app.bin", length, xm_on_read, &rctx);
+    iap_term_set_mute(false);
 
     if (err == ESP_OK) {
         term_puts("\r\n发送完成\r\n");
