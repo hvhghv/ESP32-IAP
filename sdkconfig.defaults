@@ -1,0 +1,120 @@
+# ESP IAP 工程默认配置
+#
+# 这些值可通过 idf.py menuconfig 修改
+
+# ---- 目标芯片默认值 (可通过 idf.py set-target 覆盖) ----
+# 默认使用 ESP32S3，如需其他芯片请执行:
+#   idf.py set-target esp32
+#   idf.py set-target esp32c6
+#   idf.py set-target esp32s3
+
+# ---- 分区表 ----
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_iap.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_iap.csv"
+# 分区表 A 位于 0x00B000 (固定区, 见 docs/FINAL-REPORT.md §2)
+CONFIG_PARTITION_TABLE_OFFSET=0xB000
+
+# ---- 允许写"危险"flash 区域 (配置区 0x8000) ----
+#
+# 背景:
+#   IDF 默认 CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y，会阻止写入
+#   「bootloader / 分区表 / 运行中的应用」区域，防止误刷变砖。
+#   保护范围由 esp_partition_main_flash_region_safe() 判定:
+#       addr <= ESP_PARTITION_TABLE_OFFSET + ESP_PARTITION_TABLE_MAX_LEN
+#   即 0x0 ~ 0xBFFF (分区表偏移 0xB000 + 4KB)。
+#
+# 问题:
+#   本项目的**配置区硬编码在 0x8000** (IAP 与 APP 共享)，
+#   落在上述保护区内 → esp_flash_erase_region() 返回 ESP_ERR_NOT_SUPPORTED
+#   → 触发 abort() 崩溃。
+#
+# 解决:
+#   启用 DANGEROUS_WRITE_ALLOWED。这是**有意为之** ——
+#   0x8000 就是我们的配置区，不是分区表 (分区表在 0xB000)。
+#   写配置区是 IAP 的核心功能，必须允许。
+#
+# 风险控制:
+#   - 配置区操作全部走 iap_config.c 的封装 (地址/长度已对齐校验)
+#   - 不会误写 bootloader (0x0) / 分区表 (0xB000) / 运行中的应用
+CONFIG_SPI_FLASH_DANGEROUS_WRITE_ALLOWED=y
+# CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS is not set
+# CONFIG_SPI_FLASH_DANGEROUS_WRITE_FAILS is not set
+
+# ---- Flash 大小 ----
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# ---- 应用回滚 (用于 IAP <-> 用户程序切换) ----
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n
+
+# ---- 组件配置 ----
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_HZ=1000
+
+# ---- RTC FAST RAM 不作为堆 ----
+#
+# 目的: 让 RTC RAM (LP RAM, 0x50000000 起) 不被 malloc 占用。
+#
+# 背景:
+#   IDF 默认 (CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=y) 会把
+#   RTC FAST RAM 加入系统堆。IAP 通过 IDF 官方 rtc_retain_mem_t.custom[]
+#   向 bootloader/APP 传递启动参数，该区域位于 LP RAM 末尾保留区，
+#   禁用此选项可避免混淆。
+#
+# 代价:
+#   堆减少 16KB (实测 141,520 → ~125,000 字节，仍然充足)
+#
+# 依据:
+#   IDF Kconfig "Enable RTC fast memory for dynamic allocations"
+#   docs/zh_CN/api-guides/memory-types.rst
+#
+# 注意: bootloader 是子项目，继承主项目的 SDKCONFIG，无需单独配置。
+CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=n
+
+# ---- RTC 保留内存 (bootloader <-> APP 参数传递) ----
+#
+# 使用 IDF 官方机制: rtc_retain_mem_t.custom[]
+#   rtc_retain_mem_t *mem = bootloader_common_get_rtc_retain_mem();
+#   iap_boot_param_t *p = (iap_boot_param_t *)mem->custom;
+#
+# 该区域位于 LP RAM 末尾保留区 (C6: 0x50004000 - RESERVE_RTC_MEM)，
+# bootloader 侧硬编码地址，APP 侧由链接器放入 .bootloader_data_rtc_mem 段，
+# 两侧地址自动一致。
+#
+# 详见 docs/FINAL-REPORT.md §5.5
+CONFIG_BOOTLOADER_RESERVE_RTC_MEM=y
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC=y
+# >= sizeof(iap_boot_param_t) = 100 字节，4 字节对齐
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE=128
+
+# ---- WiFi ----
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# ---- LWIP ----
+CONFIG_LWIP_MAX_SOCKETS=10
+CONFIG_LWIP_DHCPS=y
+CONFIG_LWIP_DHCPS_LEASE_UNIT=60
+
+# ---- HTTP Server ----
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_WS_SUPPORT=n
+
+# ---- 日志 ----
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# ---- 控制台 (UART 终端) ----
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# ---- 关闭不必要的功能以节省空间 ----
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

@@ -1,0 +1,5425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP IAP 配置与烧录工具</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2029;
+    --panel2: #232b36;
+    --border: #2f3a47;
+    --text: #e6edf3;
+    --text-dim: #8b98a8;
+    --accent: #4a9eff;
+    --accent-hover: #6bb0ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --mono: "Cascadia Code", "Consolas", "Courier New", monospace;
+    /* 让原生控件 (select 下拉/滚动条/日期选择器) 使用深色主题 */
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+  h1 { font-size: 22px; margin: 0 0 6px; font-weight: 600; }
+  h1 .ver { font-size: 12px; color: var(--text-dim); font-weight: 400; margin-left: 8px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin: 0; }
+  .badges { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .badge-pill {
+    font-size: 11px; padding: 3px 10px; border-radius: 10px;
+    background: rgba(74,158,255,.12); color: #79c0ff;
+    border: 1px solid rgba(74,158,255,.3);
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+  .card > h2 {
+    font-size: 15px; margin: 0 0 14px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card > h2::before {
+    content: ""; width: 3px; height: 14px; background: var(--accent);
+    border-radius: 2px;
+  }
+
+  /* 卡片内的子区块（如「烧录到设备」内的「分区表」） */
+  .subsec {
+    margin-top: 22px; padding-top: 18px;
+    border-top: 1px dashed var(--border);
+  }
+  .subsec > h3 {
+    font-size: 13px; margin: 0 0 12px; font-weight: 600;
+    color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .subsec > h3::before {
+    content: ""; width: 3px; height: 12px; background: var(--text-dim);
+    border-radius: 2px; opacity: .6;
+  }
+
+  /* ===== 烧录文件列表（按顺序） ===== */
+  .burnlist { display: flex; flex-direction: column; gap: 10px; }
+  .burnitem {
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel2); overflow: hidden;
+  }
+  .burnitem.filled { border-color: rgba(63,185,80,.45); }
+  .burnitem.error  { border-color: rgba(248,81,73,.55); }
+  .bi-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; background: rgba(255,255,255,.02);
+    border-bottom: 1px solid var(--border);
+  }
+  .bi-idx {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--border); color: var(--text-dim);
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .burnitem.filled .bi-idx { background: var(--accent); color: #fff; }
+
+  /* 槽位勾选框 */
+  .bi-check { display: flex; align-items: center; flex: 0 0 auto; cursor: pointer; }
+  .bi-check input {
+    width: 16px; height: 16px; margin: 0; cursor: pointer;
+    accent-color: var(--accent);
+  }
+  /* 未勾选时内容区变暗（提示该槽位不参与烧录） */
+  .burnitem:not(.checked) .bi-body { opacity: .45; }
+  .burnitem:not(.checked) .bi-title { color: var(--text-dim); }
+  .burnitem:not(.checked) .bi-idx { background: var(--border); color: var(--text-dim); }
+  .burnitem.checked { border-color: rgba(63,185,80,.55); }
+  .bi-title { font-size: 13px; font-weight: 600; }
+  .bi-addr {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    margin-left: auto;
+  }
+  .bi-state {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(139,152,168,.18); color: var(--text-dim);
+    font-weight: 600; flex: 0 0 auto;
+  }
+  .bi-state.ok   { background: rgba(63,185,80,.18);  color: #7ee787; }
+  .bi-state.err  { background: rgba(248,81,73,.18);  color: #ff7b72; }
+  .bi-state.warn { background: rgba(210,153,34,.18); color: #e3b341; }
+  .bi-body { padding: 10px 12px; }
+  .bi-file {
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    margin-bottom: 8px; word-break: break-all;
+  }
+  .burnitem.filled .bi-file { color: var(--text); }
+  .bi-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .bi-btn {
+    padding: 5px 12px; font-size: 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); cursor: pointer;
+  }
+  .bi-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hover); }
+  .bi-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .bi-btn.bi-clear { color: var(--text-dim); }
+  .bi-gen {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .bi-gen input[type=text] { width: auto; }
+  .bi-gen button { padding: 5px 10px; font-size: 12px; }
+  .bi-type {
+    margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .bi-type label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .bi-detail { margin-top: 8px; }
+  .bi-detail table.info td { font-size: 12px; padding: 4px 8px; }
+  .bi-note {
+    margin-top: 8px; font-size: 12px; line-height: 1.6;
+    color: var(--text-dim);
+  }
+  .boot-mode {
+    margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .boot-mode-opt { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .boot-mode-opt input[type=radio] { margin: 0; cursor: pointer; }
+  .boot-mode-opt:hover { color: var(--text); }
+  .boot-mode-opt input:disabled + span { opacity: .45; }
+  /* 区域跳过选项 */
+  .skip-region {
+    margin-top: 8px; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: rgba(255,255,255,.02);
+  }
+  .skip-region-head {
+    font-size: 12px; color: var(--text-dim); margin-bottom: 6px;
+  }
+  .skip-region-opts {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .skip-region-opts label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .skip-region-opts label:hover { color: var(--text); }
+  .skip-region-opts input[type=checkbox] { margin: 0; cursor: pointer; }
+  .skip-region-opts .addr { opacity: .6; font-family: var(--mono); font-size: 11px; }
+  .skip-region-warn {
+    margin-top: 6px; font-size: 11px; line-height: 1.5; color: #d29922;
+  }
+
+  /* ===== OTA 槽位列表 ===== */
+  .slotlist-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+  }
+  .slotlist-title { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+  .slotlist-actions { display: flex; gap: 6px; }
+  .slotlist {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+    font-family: var(--mono);
+  }
+  .slotlist th {
+    text-align: left; padding: 5px 8px; font-weight: 600;
+    color: var(--text-dim); border-bottom: 1px solid var(--border);
+    font-size: 11px; white-space: nowrap;
+  }
+  .slotlist td {
+    padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.04);
+    vertical-align: middle;
+  }
+  .slotlist tr.active { background: rgba(63,185,80,.07); }
+  .slotlist tr.active td:first-child { box-shadow: inset 2px 0 0 var(--ok); }
+  .slotlist .sl-idx { color: var(--text-dim); width: 46px; }
+  .slotlist .sl-name { color: var(--text); }
+  .slotlist .sl-addr { color: var(--text-dim); }
+  .slotlist .sl-size { color: var(--text-dim); }
+  .slotlist .sl-pick { width: 60px; text-align: center; }
+  .slotlist .sl-pick input { margin: 0; cursor: pointer; }
+  .slotlist-foot {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .boot-chip {
+    margin-top: 8px; display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text-dim); flex-wrap: wrap;
+  }
+  .boot-chip label { white-space: nowrap; }
+  .boot-chip select { padding: 4px 8px; font-size: 12px; }
+  .boot-chip.hidden { display: none; }
+  .bi-applied {
+    margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+    font-size: 12px; line-height: 1.5;
+    background: rgba(63,185,80,.10);
+    border: 1px solid rgba(63,185,80,.35);
+    color: var(--text);
+  }
+
+
+  .row { display: grid; grid-template-columns: 170px 1fr; gap: 10px 14px; align-items: center; margin-bottom: 10px; }
+  .row > label { color: var(--text-dim); font-size: 13px; }
+  .hint { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+
+  input[type=text], input[type=number], select, textarea {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 7px 10px; font-size: 13px; width: 100%;
+    font-family: inherit;
+  }
+  input[type=text], input[type=number], textarea { font-family: var(--mono); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  input[readonly] { color: var(--text-dim); }
+  textarea { resize: vertical; min-height: 60px; }
+
+  button {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: all .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hover); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+  button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+
+  .btnrow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+  .flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .flag {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 7px 11px; font-size: 13px;
+    transition: all .15s;
+  }
+  .flag:hover { border-color: var(--accent); }
+  .flag > span.fname { flex: 1; white-space: nowrap; }
+  .flag select {
+    width: auto; min-width: 88px; padding: 4px 8px;
+    font-size: 12px; margin: 0;
+  }
+  .flag span.bit { color: var(--text-dim); font-size: 11px; font-family: var(--mono); }
+  /* 使能状态高亮 */
+  .flag.on { border-color: rgba(74,158,255,.55); }
+  .flag.on > span.fname { color: var(--accent); }
+  /* 芯片不支持时置灰 */
+  .flag.disabled { opacity: .45; }
+  .flag.disabled select { cursor: not-allowed; }
+
+  /* ===== 右上角消息弹窗 (toast) ===== */
+  #toasts {
+    position: fixed; top: 16px; right: 16px; z-index: 9999;
+    display: flex; flex-direction: column; gap: 10px;
+    max-width: min(420px, calc(100vw - 32px));
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px 14px; border-radius: 8px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    box-shadow: 0 6px 22px rgba(0,0,0,.45);
+    font-size: 13px; line-height: 1.5;
+    animation: toast-in .22s ease-out;
+    transition: opacity .2s, transform .2s;
+  }
+  .toast.hide { opacity: 0; transform: translateX(24px); }
+  .toast-icon { flex: 0 0 auto; font-size: 15px; line-height: 1.4; }
+  .toast-body { flex: 1; min-width: 0; }
+  .toast-title { font-weight: 600; margin-bottom: 2px; }
+  .toast-msg {
+    color: var(--text-dim); white-space: pre-wrap;
+    word-break: break-word; font-family: var(--mono); font-size: 12px;
+  }
+  .toast-close {
+    flex: 0 0 auto; background: none; border: none; color: var(--text-dim);
+    cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px;
+  }
+  .toast-close:hover { color: var(--text); }
+
+  .toast.ok   { border-left-color: var(--ok); }
+  .toast.ok   .toast-icon { color: var(--ok); }
+  .toast.err  { border-left-color: var(--err); }
+  .toast.err  .toast-icon { color: var(--err); }
+  .toast.warn { border-left-color: var(--warn); }
+  .toast.warn .toast-icon { color: var(--warn); }
+  .toast.info { border-left-color: var(--accent); }
+  .toast.info .toast-icon { color: var(--accent); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(24px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .drop {
+    border: 2px dashed var(--border); border-radius: 8px;
+    padding: 34px 20px; text-align: center; cursor: pointer;
+    transition: all .2s; background: var(--panel2);
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(74,158,255,.06); }
+  .drop .big { font-size: 15px; margin-bottom: 6px; }
+  .drop .small { color: var(--text-dim); font-size: 12px; }
+  .drop input { display: none; }
+
+  table.info { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.info td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  table.info td:first-child { color: var(--text-dim); width: 190px; }
+  table.info td:last-child { font-family: var(--mono); }
+  table.info tr:last-child td { border-bottom: none; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-family: var(--mono); font-weight: 600;
+  }
+  .badge.ok { background: rgba(63,185,80,.18); color: #7ee787; }
+  .badge.err { background: rgba(248,81,73,.18); color: #ff7b72; }
+  .badge.warn { background: rgba(210,153,34,.18); color: #e3b341; }
+  .badge.dim { background: rgba(139,152,168,.18); color: var(--text-dim); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+  /* 两列卡片不拉伸等高，避免短卡片底部留大片空白 */
+  .grid2 > .card { align-self: start; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
+
+  .hidden { display: none !important; }
+  .mt { margin-top: 16px; }
+  code { font-family: var(--mono); background: var(--panel2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+  /* --- 烧录相关 --- */
+  .terminal {
+    background: #0a0e13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; font-family: var(--mono); font-size: 12px;
+    line-height: 1.55; height: 260px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all; color: #c9d1d9;
+  }
+  .terminal .t-info { color: #79c0ff; }
+  .terminal .t-ok   { color: #7ee787; }
+  .terminal .t-warn { color: #e3b341; }
+  .terminal .t-err  { color: #ff7b72; }
+  .terminal .t-dim  { color: var(--text-dim); }
+
+  .progress {
+    height: 8px; background: var(--panel2); border-radius: 4px;
+    overflow: hidden; margin: 10px 0 6px;
+  }
+  .progress > div {
+    height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #7ee787);
+    transition: width .15s ease;
+  }
+  .progtext { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+
+  .devrow {
+    display: grid; grid-template-columns: 130px 1fr; gap: 8px 12px;
+    align-items: center; font-size: 13px; margin-bottom: 8px;
+  }
+  .devrow > span:first-child { color: var(--text-dim); }
+  .devrow > span:last-child { font-family: var(--mono); }
+
+  .warnbox {
+    background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.35);
+    border-radius: 6px; padding: 10px 14px; font-size: 12.5px;
+    color: #e3b341; margin-bottom: 14px;
+  }
+  .warnbox b { color: #f0c674; }
+
+  select.opt { max-width: 160px; }
+
+  /* --- 文件类型选择 --- */
+  .filetypes {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .ftype {
+    position: relative; cursor: pointer; display: block;
+  }
+  .ftype input { position: absolute; opacity: 0; pointer-events: none; }
+  .ftype-body {
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px; transition: all .15s; height: 100%;
+  }
+  .ftype:hover .ftype-body { border-color: var(--accent); }
+  .ftype input:checked + .ftype-body {
+    border-color: var(--accent); background: rgba(74,158,255,.1);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .ftype-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .ftype input:checked + .ftype-body .ftype-title { color: var(--accent-hover); }
+  .ftype-desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
+  .ftype-desc code { font-size: 11px; }
+
+  /* --- 用户程序摘要 --- */
+  .appsum {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px 16px; font-size: 12.5px;
+  }
+  .appsum > div { display: flex; gap: 8px; }
+  .appsum .k { color: var(--text-dim); min-width: 56px; }
+  .appsum .v { font-family: var(--mono); }
+
+  /* --- 烧录目标指示条 --- */
+  .targetbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--panel2); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 10px 14px; font-size: 13px;
+  }
+  .targetbar .tlabel { color: var(--text-dim); font-size: 12px; }
+  .targetbar .tvalue { font-weight: 600; color: var(--accent-hover); }
+  .targetbar .taddr {
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    background: rgba(139,152,168,.12); padding: 2px 8px; border-radius: 4px;
+  }
+  .targetbar.empty { border-left-color: var(--border); }
+  .targetbar.empty .tvalue { color: var(--text-dim); font-weight: 400; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>ESP IAP 配置与烧录工具</h1>
+    <p class="sub">
+      在线编辑出厂配置、烧录固件、读写设备 Flash。
+      全部在浏览器本地完成，文件不会上传。
+    </p>
+    <div class="badges">
+      <span class="badge-pill">纯前端</span>
+      <span class="badge-pill">免安装</span>
+      <span class="badge-pill">Web Serial</span>
+      <span class="badge-pill">内置完整镜像</span>
+    </div>
+  </header>
+
+  <!-- 右上角消息弹窗容器 -->
+  <div id="toasts"></div>
+
+  <!-- ================= 设备连接（独立区块） ================= -->
+  <div class="card" id="connCard">
+    <h2>设备连接</h2>
+
+    <div id="serialUnsupported" class="warnbox hidden">
+      <b>当前浏览器不支持 Web Serial</b><br>
+      请改用桌面版 Chrome 或 Edge（89 以上版本）。
+    </div>
+
+    <div id="serialInsecure" class="warnbox hidden">
+      <b>需通过 localhost 或 https 访问</b><br>
+      浏览器要求安全上下文才能使用串口。请用
+      <code>http://localhost</code> 或 <code>https://</code> 打开，
+      不要直接双击 HTML 文件（<code>file://</code>）。
+    </div>
+
+    <div id="connUI">
+      <div class="btnrow" style="margin-top:0">
+        <button class="primary" id="btnConnect">连接设备</button>
+        <button id="btnDisconnect" disabled>断开</button>
+      </div>
+
+      <div class="mt" id="devInfoBox" style="display:none">
+        <div class="devrow"><span>芯片</span><span id="devChip">-</span></div>
+        <div class="devrow"><span>MAC</span><span id="devMac">-</span></div>
+        <div class="devrow"><span>Flash 大小</span><span id="devFlash">-</span></div>
+        <div class="devrow"><span>晶振</span><span id="devCrystal">-</span></div>
+      </div>
+
+      <div class="row mt">
+        <label>烧录波特率</label>
+        <div>
+          <select id="flashBaud" class="opt">
+            <option value="115200">115200（最稳）</option>
+            <option value="230400">230400</option>
+            <option value="460800" selected>460800（推荐）</option>
+            <option value="921600">921600</option>
+            <option value="1500000">1500000（最快）</option>
+          </select>
+          <div class="hint" id="flashBaudHint">连接时先用 115200 握手，之后自动切换</div>
+        </div>
+      </div>
+
+      <div class="terminal mt" id="term"><span class="t-dim">等待连接设备...</span></div>
+    </div>
+  </div>
+
+  <!-- ================= 烧录到设备 ================= -->
+  <div class="card" id="flashCard">
+    <h2>烧录到设备</h2>
+
+    <div id="flashUI">
+      <!-- ============ 烧录文件列表（按顺序烧录） ============ -->
+      <div class="burnlist" id="burnList">
+        <!-- 槽位 0: bootloader -->
+        <div class="burnitem" data-slot="boot">
+          <div class="bi-head">
+            <label class="bi-check" title="勾选后参与烧录">
+              <input type="checkbox" id="biChkBoot">
+            </label>
+            <span class="bi-idx">0</span>
+            <span class="bi-title">IAP 烧录文件</span>
+            <span class="bi-state" id="biStateBoot">未选择</span>
+          </div>
+          <div class="bi-body">
+            <div class="bi-file" id="biFileBoot">—</div>
+
+            <!-- bootloader 来源模式: 内置 / 手动 -->
+            <div class="boot-mode" id="bootModeBox">
+              <label class="boot-mode-opt">
+                <input type="radio" name="bootMode" id="bootModeBuiltin" value="builtin" checked>
+                <span id="bootBuiltinLabel">使用内置 IAP 镜像</span>
+              </label>
+              <label class="boot-mode-opt">
+                <input type="radio" name="bootMode" id="bootModeManual" value="manual">
+                <span>手动选择文件</span>
+              </label>
+            </div>
+
+            <!-- 内置 IAP 镜像芯片类型选择 -->
+            <div class="boot-chip hidden" id="bootChipRow">
+              <label for="bootChipSelect">芯片类型</label>
+              <select id="bootChipSelect"></select>
+              <span class="t-dim" id="bootChipNote"></span>
+            </div>
+
+            <div class="bi-actions">
+              <button class="bi-btn" data-pick="boot" id="btnBootPick" disabled>选择文件</button>
+              <button class="bi-btn" id="btnBootExport" disabled>导出内置</button>
+              <button class="bi-btn bi-clear" data-clear="boot">清除</button>
+            </div>
+
+            <!-- 区域跳过选项: 只烧部分区域 -->
+            <div class="skip-region" id="bootSkipBox">
+              <div class="skip-region-head">
+                烧录范围（勾选表示<b>跳过</b>该区域，不覆盖设备上已有内容）
+              </div>
+              <div class="skip-region-opts">
+                <label title="跳过 0x0 ~ 0x7FFF，保留设备上现有 bootloader">
+                  <input type="checkbox" id="skipBootloader">
+                  <span>不烧 bootloader <span class="addr">0x0</span></span>
+                </label>
+                <label title="跳过 0x8000 ~ 0x9FFF，保留设备上现有出厂配置（默认勾选）">
+                  <input type="checkbox" id="skipCfg" checked>
+                  <span>不烧配置区 <span class="addr">0x8000</span></span>
+                </label>
+                <label title="跳过 0xB000 ~ 0xBFFF，保留设备上现有分区表 A">
+                  <input type="checkbox" id="skipPtable">
+                  <span>不烧分区表 A <span class="addr">0xB000</span></span>
+                </label>
+                <label title="跳过 0x10000 ~ 0x13FFFF，保留设备上现有 IAP 程序">
+                  <input type="checkbox" id="skipIap">
+                  <span>不烧 IAP 程序 <span class="addr">0x10000</span></span>
+                </label>
+              </div>
+              <div class="skip-region-warn" id="bootSkipWarn" style="display:none"></div>
+            </div>
+
+            <div class="bi-note" id="bootHint" style="display:none">
+              首次烧录必须包含本文件，否则设备无法启动
+              （报 <code>invalid header: 0xffffffff</code>）。<br>
+              <code>iap_side.bin</code>（0x0 ~ 0x13FFFF，1280KB）
+              = <b>bootloader + 配置区 + 分区表 A + IAP 程序</b>（nvs 首次启动自动初始化）。
+            </div>
+            <div class="bi-note" id="bootBuiltinHint" style="display:none">
+              内置 IAP 镜像默认按检测到的芯片自动选择；也可在上方「芯片类型」中手动指定。<br>
+              内置数据是<b>完整的 <code>iap_side.bin</code></b>（1280KB，0x0 ~ 0x13FFFF）
+              = <b>bootloader + 出厂配置 + 分区表 A + IAP 程序</b>。<br>
+              <b>✅ 直接烧录即可启动</b>，无需额外烧 IAP 程序。<br>
+              下方<b>「烧录范围」</b>同样生效 —— 勾选后对应区域不会被写入
+              （如勾选「不烧配置区」可保留设备上的现有配置）。
+            </div>
+            <div class="bi-detail" id="bootDetailBox" style="display:none">
+              <table class="info" id="bootDetail"></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 槽位 1: 用户程序 -->
+        <div class="burnitem" data-slot="app">
+          <div class="bi-head">
+            <label class="bi-check" title="勾选后参与烧录">
+              <input type="checkbox" id="biChkApp">
+            </label>
+            <span class="bi-idx">1</span>
+            <span class="bi-title">用户程序</span>
+            <span class="bi-state" id="biStateApp">未选择</span>
+          </div>
+          <div class="bi-body">
+            <div class="bi-file" id="biFileApp">—</div>
+            <div class="bi-actions">
+              <button class="bi-btn" data-pick="app">选择文件</button>
+              <button class="bi-btn bi-clear" data-clear="app">清除</button>
+            </div>
+            <div class="bi-note" id="appPartNote">
+              烧录地址与大小由设备上的 <b>分区表 B</b> 启动槽决定（由用户程序工程编译）。
+            </div>
+            <div class="bi-detail" id="appDetailBox" style="display:none">
+              <table class="info" id="appDetail"></table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 隐藏的文件输入（按槽位复用） -->
+      <input type="file" id="fileInput" accept=".bin,.img,.csv" style="display:none">
+
+      <!-- 烧录摘要与操作 -->
+      <div class="mt" id="burnSummaryBox">
+        <div class="targetbar" id="burnTargetBar">
+          <span class="tlabel">烧录顺序</span>
+          <span class="tvalue" id="burnTargetName">未选择文件</span>
+        </div>
+        <div class="hint" id="burnTargetHint">请至少选择一个文件。</div>
+      </div>
+
+      <div class="btnrow">
+        <button class="primary" id="btnFlash" disabled>开始烧录</button>
+        <button id="btnAppErase" disabled>擦除用户程序区</button>
+        <button id="btnAppInfo" disabled>查询用户程序信息</button>
+        <button id="btnAppBoot" disabled>启动用户程序</button>
+      </div>
+      <div class="hint">
+        <b>救援进入 IAP</b>（已取消 flash 标志区，v5）：上电时按住 <b>BOOT 键 (GPIO0)</b>，
+        或在等待窗口内向串口发送 <code>iap</code> 字符串。
+      </div>
+
+      <div class="progress mt" id="progBox" style="display:none">
+        <div id="progBar"></div>
+      </div>
+      <div class="progtext" id="progText"></div>
+    </div>
+  </div>
+
+
+  <!-- ===== 以下区块始终可用（不依赖是否加载配置文件） ===== -->
+
+    <div class="card" id="dumpCard">
+      <h2>读取设备 Flash</h2>
+
+      <div class="warnbox">
+        将设备 Flash 内容读回并导出为 bin 文件，可用于<b>备份</b>或<b>克隆</b>设备。
+        速度取决于波特率（1MB 约 30 秒 @460800）。
+      </div>
+
+      <div class="row">
+        <label>读取范围</label>
+        <div>
+          <select id="dumpScope" class="opt">
+            <option value="full" selected>整片 Flash</option>
+            <option value="iap">IAP 程序区 (0x10000, 1216KB)</option>
+            <option value="cfg">配置区 (0x8000, 8KB)</option>
+            <option value="app">用户程序区 (0x150000, 2752KB)</option>
+            <option value="custom">自定义范围...</option>
+          </select>
+          <div class="hint" id="dumpScopeHint"></div>
+        </div>
+      </div>
+
+      <div class="row" id="dumpCustomRow" style="display:none">
+        <label>自定义范围</label>
+        <div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="dumpAddr" placeholder="0x10000" style="max-width:130px">
+            <span class="hint">地址</span>
+            <input type="text" id="dumpSize" placeholder="0x2000" style="max-width:130px">
+            <span class="hint">长度</span>
+          </div>
+          <div class="hint">支持 0x 十六进制或十进制；长度会自动对齐到 4KB</div>
+        </div>
+      </div>
+
+      <div class="btnrow">
+        <button class="primary" id="btnDump" disabled>读取并导出 bin</button>
+        <button id="btnDumpEdit" disabled>读取配置区</button>
+      </div>
+
+      <div class="progress mt" id="dumpProgBox" style="display:none">
+        <div id="dumpProgBar"></div>
+      </div>
+      <div class="progtext" id="dumpProgText"></div>
+
+      <div class="mt" id="dumpResultBox" style="display:none">
+        <table class="info" id="dumpResult"></table>
+      </div>
+
+      <!-- 读回配置后的编辑表单 -->
+      <div class="mt" id="dumpEditBox" style="display:none">
+        <div class="warnbox">
+          已从设备读取配置区。修改下方字段后点「写回设备」即可生效（只写 8KB 配置区，
+          <b>不影响 IAP 程序与用户程序</b>）。
+        </div>
+
+        <!-- ===== 功能开关 ===== -->
+        <div class="card">
+          <h2>功能开关</h2>
+          <div class="flags" id="de_flagsBox"></div>
+          <div class="row mt">
+            <label>flags 原始值</label>
+            <div style="display:flex;gap:10px;align-items:center">
+              <input type="text" id="de_flags" readonly style="max-width:140px">
+              <span class="hint" id="de_flags_desc"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 启动等待 ===== -->
+        <div class="card">
+          <h2>启动等待</h2>
+          <div class="row">
+            <label>等待秒数</label>
+            <div>
+              <input type="number" id="de_wait" min="0" max="3600">
+              <div class="hint">进入 IAP 后等待触发源的秒数，0 表示不等待</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== WiFi / UART ===== -->
+        <div class="grid2">
+          <div class="card">
+            <h2>WiFi 热点</h2>
+            <div class="row">
+              <label>SSID</label>
+              <div>
+                <input type="text" id="de_ssid" maxlength="31">
+                <div class="hint">最长 31 字节</div>
+              </div>
+            </div>
+            <div class="row">
+              <label>密码</label>
+              <div>
+                <input type="text" id="de_password" maxlength="63">
+                <div class="hint">8~63 字节；留空表示开放网络</div>
+              </div>
+            </div>
+            <div class="row">
+              <label>信道</label>
+              <input type="number" id="de_channel" min="1" max="14">
+            </div>
+            <div class="row">
+              <label>AP IP 地址</label>
+              <input type="text" id="de_ip" placeholder="192.168.4.1">
+            </div>
+            <div class="row">
+              <label>子网掩码</label>
+              <input type="text" id="de_netmask" placeholder="255.255.255.0">
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>UART 终端</h2>
+            <div class="row">
+              <label>端口号</label>
+              <select id="de_uartport">
+                <option value="0">UART0（默认日志口）</option>
+                <option value="1">UART1</option>
+                <option value="2">UART2</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>TX 引脚</label>
+              <div>
+                <input type="text" id="de_uarttx" placeholder="默认">
+                <div class="hint">留空或 0xFF = 用该端口默认引脚</div>
+              </div>
+            </div>
+            <div class="row">
+              <label>RX 引脚</label>
+              <div>
+                <input type="text" id="de_uartrx" placeholder="默认">
+                <div class="hint">留空或 0xFF = 用该端口默认引脚</div>
+              </div>
+            </div>
+            <div class="row">
+              <label>波特率</label>
+              <div>
+                <input type="number" id="de_baud" min="1200" max="5000000" step="100">
+                <div class="hint">常用: 115200 / 921600 / 1500000</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== I2C / 触发引脚 ===== -->
+        <div class="grid2">
+          <div class="card">
+            <h2>I2C 从机</h2>
+            <div class="row">
+              <label>SCL 引脚</label>
+              <input type="number" id="de_scl" min="0" max="48">
+            </div>
+            <div class="row">
+              <label>SDA 引脚</label>
+              <input type="number" id="de_sda" min="0" max="48">
+            </div>
+            <div class="row">
+              <label>从机地址</label>
+              <div>
+                <input type="text" id="de_i2caddr" placeholder="0x42">
+                <div class="hint">7 位地址，0x08~0x77</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>触发引脚</h2>
+            <div class="row">
+              <label>GPIO 引脚</label>
+              <div>
+                <input type="number" id="de_trig" min="0" max="255">
+                <div class="hint">0 = GPIO0 (BOOT 键)；255 (0xFF) 表示未配置</div>
+              </div>
+            </div>
+            <div class="row">
+              <label>触发方式</label>
+              <div>
+                <select id="de_triglevel">
+                  <option value="0">上拉，低电平触发</option>
+                  <option value="1">下拉，高电平触发</option>
+                </select>
+                <div class="hint">引脚常态为高，接地即触发进入 IAP</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== APP 启动槽 ===== -->
+        <div class="card">
+          <h2>APP 启动槽</h2>
+          <div class="warnbox">
+            IAP 启动时按<b>启动槽序号</b>决定加载哪个 APP 分区。<br>
+            槽的<b>加载地址 / 大小</b>直接保存在配置区里，由你手动填写 ——
+            IAP <b>不解析任何分区表</b>，分区布局完全由你的用户程序工程决定。
+          </div>
+
+          <div class="slotlist-head">
+            <span class="slotlist-title">槽位列表</span>
+            <div class="slotlist-actions">
+              <button class="bi-btn" id="btnDeSlotAdd" title="增加一个槽">＋ 添加槽</button>
+              <button class="bi-btn" id="btnDeSlotDel" title="减少一个槽">－ 删除槽</button>
+            </div>
+          </div>
+
+          <input type="hidden" id="de_otaslots" value="1">
+          <input type="hidden" id="de_activeslot" value="0">
+
+          <table class="slotlist" id="de_otaslot_table">
+            <!-- 由 JS 填充 -->
+          </table>
+          <div class="hint mt" id="de_otaSlotSummary"></div>
+
+          <div class="slotlist-foot">
+            <div class="row">
+              <label>槽选择 GPIO</label>
+              <div>
+                <input type="number" id="de_otagpio" min="0" max="255" step="1" placeholder="255（禁用）">
+                <div class="hint">可选。按 <code>电平 % 槽数</code> 选启动槽，用于跳线切换版本。<code>255</code> 表示关闭该功能</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 启动参数 ===== -->
+        <div class="card">
+          <h2>启动参数</h2>
+          <div class="row" style="grid-template-columns:1fr">
+            <div>
+              <textarea id="de_bootparam" maxlength="255" style="min-height:48px"></textarea>
+              <div class="hint">
+                IAP 写入、用户程序读取。建议格式 <code>key=value;key=value</code>，最长 255 字节。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="btnrow">
+          <button class="primary" id="btnDumpWrite">写回设备</button>
+          <button id="btnDumpReload">重新读取</button>
+          <button id="btnDumpExport">导出为 bin</button>
+          <button class="danger" id="btnDumpCancel">取消编辑</button>
+        </div>
+
+        <div class="hint mt" id="dumpEditHint"></div>
+      </div>
+
+      <div class="terminal mt" id="dumpTerm"><span class="t-dim">等待连接设备...</span></div>
+    </div>
+
+  <div class="card" id="helpCard">
+    <h2>参考信息</h2>
+    <table class="info">
+      <tr><td>支持的文件</td><td>
+        <code>iap_side.bin</code> —— IAP 烧录文件（0x0 ~ 0x13FFFF，含 bootloader + 配置区 + 分区表 A + IAP 程序）<br>
+        <code>iap_cfg.bin</code> —— 8KB 独立配置区<br>
+        <code>user.bin</code> —— 用户程序（<b>从 0x140000 开始的完整镜像</b>，含分区表 B）<br>
+        <span class="t-dim">所有文件格式都会自动校验</span>
+      </td></tr>
+      <tr><td>烧录槽位</td><td>
+        <b>1. IAP 烧录文件</b> → <code>0x000000</code>（<code>iap_side.bin</code>，1280KB 整片）<br>
+        <b>2. 用户程序</b> → <code>0x140000</code>（<code>user.bin</code>，整段写入）<br>
+        两个文件地址不重叠，可任意顺序烧录
+      </td></tr>
+      <tr><td>用户程序镜像</td><td>
+        ⚠️ <b>必须是单一文件</b>，从 <code>0x140000</code> 开始：<br>
+        <code>0x140000</code> 分区表 B　<code>0x141000</code> 0xFF 填充　<code>0x150000</code> 应用镜像<br>
+        <span class="t-dim">用 <code>build_user_app.py</code> 或 <code>merge_user_app.py</code> 生成（会合并分区表 B）</span>
+      </td></tr>
+      <tr><td>用户程序地址</td><td>
+        <b>不再硬编码</b>，由<b>设备上的分区表 B</b> 的 OTA 槽决定：<br>
+        槽 0 → <code>user_app</code> (ota_0)　槽 N → <code>user_app_N</code> (ota_N)<br>
+        <span class="t-dim">分区表 B 属用户程序工程，本工具连接设备时自动读回</span>
+      </td></tr>
+      <tr><td>多 OTA 槽</td><td>
+        <b>槽位布局由用户程序工程的分区表 B 决定</b>（本工具不生成）：<br>
+        · <b>槽位列表</b> —— 连接设备后自动读回，单选按钮指定<b>启动槽</b><br>
+        · <b>槽选择 GPIO</b>（可选）—— 启用后按 <code>引脚电平 % 槽数</code> 选择启动槽，<br>
+        &nbsp;&nbsp;用于产线/现场用跳线切换固件版本（单引脚只能区分 2 个槽）<br>
+        <span class="t-dim">要增减 OTA 槽，请修改 <code>examples/user_app_template/partitions_user_app.csv</code> 后重新编译用户程序</span>
+      </td></tr>
+      <tr><td>局部烧录</td><td>
+        「IAP 烧录文件」槽位可勾选<b>不烧录</b>的区域，保留设备上已有内容：<br>
+        · 不烧 bootloader <code>0x0</code>　· <b>不烧配置区 <code>0x8000</code>（默认勾选）</b><br>
+        · 不烧分区表 A <code>0xB000</code>　· 不烧 IAP 程序 <code>0x10000</code><br>
+        <span class="t-dim">内置 IAP 镜像与手动选择文件两种模式下均生效</span>
+      </td></tr>
+      <tr><td>配置区布局</td><td>2 个 4096 字节槽；每槽 = 28B 头部 + 612B 数据</td></tr>
+      <tr><td>分区布局</td><td><b>v5 双分区表</b><br>
+        固定区: iap_cfg 0x8000 (硬编码) / 分区表A 0xB000 / nvs 0xC000 / iap 0x10000<br>
+        可变区: 分区表B 0x140000 / nvs 0x141000 / user_app 0x150000</td></tr>
+      <tr><td>分区表工具</td><td>下方「分区表工具」可按 flash 容量生成并导出分区表 A/B（bin/CSV），<br>
+        供用户程序工程使用。只有 user_app 分区大小随 flash 变化，其余分区固定</td></tr>
+      <tr><td>分区表修改规则</td><td>
+        <b>✅ 允许</b>：1. 修改 user_app 的 Size　2. 在 user_app 之后追加新分区<br>
+        <b>❌ 禁止</b>：修改 user_app 起始地址 (0x150000) 之前的任何内容<br>
+        在 user_app 之后追加分区可用于用户程序的文件系统 (LittleFS / SPIFFS / FAT)</td></tr>
+      <tr><td>救援进入 IAP</td><td><b>已取消 flash 标志区（v5）</b>，改用：<br>
+        A. 上电时按住 <b>BOOT 键 (GPIO0)</b> —— IAP 等待窗口内检测低电平<br>
+        B. 等待窗口内向串口发送 <code>iap</code> 字符串<br>
+        C. 用户程序主动请求（写 RTC RAM → 重启）<br>
+        D. 断电重上电 —— 冷启动 RTC RAM 无效，默认进 IAP</td></tr>
+      <tr><td>写回策略</td><td>写入槽 0（seq=1），槽 1 置为擦除态 0xFF</td></tr>
+      <tr><td>校验</td><td>配置区：头部 CRC32 + 数据 CRC32（IEEE 802.3）<br>
+        用户程序：由 bootloader 启动时自校验（magic 0xE9 / 段表 / SHA256）</td></tr>
+      <tr><td>直接烧录</td><td>基于 Web Serial API + esptool-js，需 Chrome/Edge 89+<br>仅支持 localhost / https 访问</td></tr>
+      <tr><td>隐私</td><td>纯前端实现，文件不离开本机</td></tr>
+    </table>
+  </div>
+
+</div>
+
+<!-- ==========================================================================
+     内置 IAP 镜像 —— 索引文件 (仅元数据, 几 KB)
+
+     v6: 默认只加载本索引。实际镜像数据 (每个 1280KB, 压缩后 ~600KB) 放在
+         独立的 assets/iap_img_<chip>.js 中，**首次需要某芯片时才按需加载**。
+
+     ⚠️ 这两个文件是**构建产物**，不在开发项目中生成/跟踪，由
+        GitHub Actions 构建页面时自动生成并放在 HTML 同目录。
+
+        若文件缺失 (例如本地直接打开源码)，页面仍可正常使用
+        「手动选择文件」模式 —— 脚本加载失败不会阻断页面。
+
+     本地按需生成:
+         python tools/gen_boot_embed.py --out-js esp_iap_builtin.js \
+                                        --out-dir assets
+     ========================================================================== -->
+<script src="esp_iap_builtin.js" onerror="window.__builtinIndexMissing=true"></script>
+
+<script type="module">
+"use strict";
+
+/* ==========================================================================
+ * esptool-js 动态加载
+ *
+ * bundle.js 是 ES module（非 UMD），必须用 import 而非 <script src>。
+ * 采用动态 import 以便在加载失败时给出友好提示，且不影响配置编辑功能。
+ * ========================================================================== */
+const ESPTOOL_CDN = [
+  "https://unpkg.com/esptool-js@0.6.1/bundle.js",
+  "https://cdn.jsdelivr.net/npm/esptool-js@0.6.1/bundle.js",
+];
+
+let ESPTOOL = null;          // { ESPLoader, Transport, ... }
+
+async function loadEsptool() {
+  for (const url of ESPTOOL_CDN) {
+    try {
+      const mod = await import(/* @vite-ignore */ url);
+      if (mod && mod.ESPLoader && mod.Transport) {
+        ESPTOOL = mod;
+        return { ok: true, url };
+      }
+    } catch (e) {
+      // 尝试下一个源
+    }
+  }
+  return { ok: false };
+}
+
+/* ==========================================================================
+ * 常量 —— 必须与 main/iap_common.h 保持一致
+ * ========================================================================== */
+const CFG_MAGIC        = 0x49415043;   // "IAPC"
+const CFG_VERSION      = 0x0001;       // 槽头部格式版本
+const CFG_DATA_VER     = 0x0003;       // 配置数据版本 (用于迁移)
+const SLOT_SIZE        = 4096;
+const SLOT_COUNT       = 2;
+const HEADER_SIZE      = 28;           // sizeof(iap_cfg_header_t)
+const DATA_SIZE        = 612;          // sizeof(iap_cfg_data_t)
+const BOOT_PARAM_SIZE  = 256;
+const CFG_PART_SIZE    = SLOT_SIZE * SLOT_COUNT;   // 8192
+
+// UART 引脚: 0xFF 表示"用该端口的芯片默认引脚"
+// UART0 默认即 ESP 系列默认日志输出口
+//   ESP32/S2/S3       = TX GPIO1  / RX GPIO3
+//   ESP32-C2/C3/C6/H2 = TX GPIO21 / RX GPIO20
+const UART_PIN_DEFAULT = 0xFF;
+
+// 各芯片 UART0 默认引脚（仅用于界面提示）
+const UART0_DEFAULT_PINS = {
+  esp32:   { tx: 1,  rx: 3  },
+  esp32s2: { tx: 43, rx: 44 },
+  esp32s3: { tx: 43, rx: 44 },
+  esp32c2: { tx: 21, rx: 20 },
+  esp32c3: { tx: 21, rx: 20 },
+  esp32c6: { tx: 21, rx: 20 },
+  esp32h2: { tx: 24, rx: 23 },
+};
+
+// ============================================================================
+// v5 双分区表布局常量 (与 tools/gen_partitions.py / main/iap_common.h 一致)
+// ============================================================================
+
+// 配置区地址 (硬编码, 不在任何分区表)
+const CFG_OFFSET_IN_IMAGE = 0x008000;
+
+// IAP 应用地址 (固定区, 硬编码)
+const IAP_APP_OFFSET = 0x010000;
+
+// 分区表 A (IAP 用)
+const PARTITION_TABLE_A_OFFSET = 0x00B000;
+// 分区表 B (APP 用) —— 必须在所有 APP 侧分区之前
+const PARTITION_TABLE_B_OFFSET = 0x140000;
+const PARTITION_TABLE_SIZE = 0x1000;      // 4KB
+const PARTITION_ENTRY_SIZE = 32;
+
+// 分区表 magic（esp32 分区表首 2 字节，小端 0x50AA）
+const PARTITION_TABLE_MAGIC = 0x50AA;
+
+// 分区表 A 结束偏移 (0xC000) —— 应用段从此处开始
+const PT_A_END_OFFSET = PARTITION_TABLE_A_OFFSET + PARTITION_TABLE_SIZE;
+
+// OTA 槽上限 (与固件 IAP_OTA_SLOT_MAX 一致)
+const OTA_SLOT_MAX = 8;
+
+// bootloader 段结束 (分区表 A 起点)
+const BOOT_PT_END = PARTITION_TABLE_A_OFFSET;
+
+// 可变区起点 (固定区结束)
+const FIXED_REGION_END = 0x140000;
+
+// 用户程序分区起始偏移
+const USER_APP_ADDR = 0x150000;
+
+// nvs 起始 (分区表 B 之后)
+const NVS_APP_ADDR = 0x141000;
+
+/* ==========================================================================
+ * IAP 烧录文件的区域划分 (用于「不烧录某区域」选项)
+ *
+ * 每个区域 = { key, name, start, end }，end 为**不含**上界。
+ * 烧录时按区域切片，跳过的区域不写入（保留设备上已有内容）。
+ * ========================================================================== */
+const SIDE_REGIONS = [
+  { key: "bootloader", name: "bootloader", start: 0x000000, end: 0x008000 },
+  { key: "cfg",        name: "配置区",     start: 0x008000, end: 0x00A000 },
+  { key: "reserved",   name: "保留",       start: 0x00A000, end: 0x00B000 },
+  { key: "ptable",     name: "分区表 A",   start: 0x00B000, end: 0x00C000 },
+  { key: "nvs_iap",    name: "nvs",        start: 0x00C000, end: 0x010000 },
+  { key: "iap",        name: "IAP 程序",   start: 0x010000, end: 0x140000 },
+];
+
+/**
+ * 区域跳过状态 (true = 不烧录该区域)
+ *
+ * 默认: 跳过配置区 —— 保留设备上已有的出厂配置 (WiFi/引脚/触发等)，
+ *       避免每次烧录都把现场配置重置为表单默认值。
+ */
+const SIDE_SKIP = {
+  bootloader: false,
+  cfg:        true,     // 默认不烧配置区
+  ptable:     false,
+  iap:        false,
+};
+
+/** 跳过选项的复选框 ID */
+const SIDE_SKIP_CHK = {
+  bootloader: "skipBootloader",
+  cfg:        "skipCfg",
+  ptable:     "skipPtable",
+  iap:        "skipIap",
+};
+
+/**
+ * 判断某区域是否被跳过
+ *
+ * 跳过 bootloader/配置区/分区表A/IAP 时，其**从属区域**一并跳过：
+ *   - 跳过 bootloader → 0x0 ~ 0x7FFF
+ *   - 跳过配置区     → 0x8000 ~ 0x9FFF
+ *   - 跳过分区表 A   → 0xB000 ~ 0xBFFF
+ *   - 跳过 IAP 程序  → 0x10000 ~ 0x13FFFF
+ *
+ * 保留区 (0xA000, 0xC000~0xFFFF) 始终随相邻区域一起处理：
+ * 若 bootloader/配置/分区表/IAP 都烧，则保留区也烧（填 0xFF）。
+ */
+function sideRegionSkipped(region) {
+  if (region.key === "bootloader") return SIDE_SKIP.bootloader;
+  if (region.key === "cfg")        return SIDE_SKIP.cfg;
+  if (region.key === "ptable")     return SIDE_SKIP.ptable;
+  if (region.key === "iap")        return SIDE_SKIP.iap;
+  // 保留区: 若两侧都跳过则跳过，否则烧
+  if (region.key === "reserved")   return SIDE_SKIP.cfg && SIDE_SKIP.ptable;
+  if (region.key === "nvs_iap")    return SIDE_SKIP.iap;   // nvs 随 IAP 一起
+  return false;
+}
+
+/**
+ * 把 IAP 烧录文件按区域切分为多个烧录段（跳过被勾选的区域）
+ *
+ * @param {Uint8Array} bytes 完整 iap_side.bin
+ * @returns {{segs:Array, skipped:string[]}}
+ */
+function sliceIapSide(bytes, cfgOffset) {
+  const segs = [];
+  const skipped = [];
+
+  for (const r of SIDE_REGIONS) {
+    if (sideRegionSkipped(r)) {
+      skipped.push(r.name + " (" + hex32(r.start) + "~" + hex32(r.end - 1) + ")");
+      continue;
+    }
+    // 文件不足则跳过（例如内置合成文件可能更短）
+    if (bytes.length <= r.start) continue;
+    const end = Math.min(r.end, bytes.length);
+    const chunk = bytes.slice(r.start, end);
+    segs.push({ data: chunk, address: r.start });
+  }
+
+  return { segs, skipped };
+}
+
+/**
+ * 判断是否是「应用段」文件 (已废弃, v5 保留兼容)
+ *
+ * v5 已改为单一连续 iap_side.bin，不再产生分段文件。
+ * 此函数保留供旧文件识别兜底。
+ */
+function looksLikeAppSegment(bytes) {
+  const off = IAP_APP_OFFSET - PT_A_END_OFFSET;   // 0x4000
+  if (bytes.length < off + 1) return false;
+  return bytes[off] === 0xE9;
+}
+
+// 分区表 A (IAP) 的固定分区 —— 与 tools/gen_partitions.py FIXED_PARTITIONS_A 一致
+const FIXED_PARTITIONS_A = [
+  { name: "nvs", type: 0x01, subtype: 0x02, offset: 0x00C000, size: 0x3000   },
+  { name: "iap",     type: 0x00, subtype: 0x00, offset: 0x010000, size: 0x130000 },
+];
+
+/*
+ * ⚠️ 分区表 B (APP 用) **不由本工具生成/维护**。
+ *
+ * 它属于**用户程序工程**（`examples/user_app_template/partitions_user_app.csv`，
+ * `CONFIG_PARTITION_TABLE_OFFSET=0x140000`），随 user.bin 一起编译烧录。
+ *
+ * 本工具**仅在烧录/擦除用户程序时**从设备读回分区表 B（0x140000, 4KB），
+ * 用于确定目标 OTA 槽的地址/大小（见 refreshDevicePtableB / resolveOtaSlotPart）。
+ *
+ * 配置区编辑（「APP 启动槽」）**不使用**分区表 B —— 它只反映配置区里
+ * 实际保存的 ota_slot_count / active_slot，槽位由用户手动增删。
+ */
+
+// 兼容旧代码: 默认使用分区表 A
+const FIXED_PARTITIONS = FIXED_PARTITIONS_A;
+const PARTITION_TABLE_OFFSET = PARTITION_TABLE_A_OFFSET;
+const PT_END_OFFSET = PT_A_END_OFFSET;
+
+/**
+ * 构造分区表二进制（4096 字节）
+ *
+ * 格式与 gen_esp32part.py 一致:
+ *   每项 32 字节: magic(2) type(1) subtype(1) offset(4) size(4) name(16) flags(4)
+ *   末尾: 0xEB 0xEB + 14 x 0xFF (16B) + MD5(前面所有字节) (16B)
+ *
+ * @param {number} flashBytes  flash 容量
+ * @param {Array=}  parts       分区条目 (默认: 分区表 A)
+ */
+function buildPartitionTableBin(flashBytes, parts) {
+  if (!parts) {
+    // 默认: 分区表 A (IAP 用)
+    parts = FIXED_PARTITIONS_A;
+  }
+
+  const entries = new Uint8Array(parts.length * PARTITION_ENTRY_SIZE);
+  const ev = new DataView(entries.buffer);
+
+  parts.forEach((p, i) => {
+    const base = i * PARTITION_ENTRY_SIZE;
+    ev.setUint16(base + 0, PARTITION_TABLE_MAGIC, true);
+    ev.setUint8(base + 2, p.type);
+    ev.setUint8(base + 3, p.subtype);
+    ev.setUint32(base + 4, p.offset, true);
+    ev.setUint32(base + 8, p.size, true);
+    const nb = new TextEncoder().encode(p.name);
+    entries.set(nb.subarray(0, 16), base + 12);
+    ev.setUint32(base + 28, 0, true);   // flags
+  });
+
+  // MD5 校验块
+  const md5 = md5Bytes(entries);
+  const tail = new Uint8Array(32);
+  tail[0] = 0xEB; tail[1] = 0xEB;
+  tail.fill(0xFF, 2, 16);
+  tail.set(md5, 16);
+
+  const out = new Uint8Array(PARTITION_TABLE_SIZE);
+  out.fill(0xFF);
+  out.set(entries, 0);
+  out.set(tail, entries.length);
+  return out;
+}
+
+/** 解析分区表二进制为条目数组（用于显示） */
+function parsePartitionTableBin(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const parts = [];
+  for (let off = 0; off + PARTITION_ENTRY_SIZE <= bytes.length; off += PARTITION_ENTRY_SIZE) {
+    const magic = dv.getUint16(off, true);
+    if (magic !== PARTITION_TABLE_MAGIC) break;
+    const type = dv.getUint8(off + 2);
+    const subtype = dv.getUint8(off + 3);
+    if (type === 0xFF) break;   // 结束标记
+    const nameBytes = bytes.subarray(off + 12, off + 28);
+    let end = nameBytes.indexOf(0);
+    if (end < 0) end = 16;
+    const name = new TextDecoder().decode(nameBytes.subarray(0, end));
+    parts.push({
+      name, type, subtype,
+      offset: dv.getUint32(off + 4, true),
+      size: dv.getUint32(off + 8, true),
+    });
+  }
+  return parts;
+}
+
+/** 分区类型/子类型的可读名称 */
+function partTypeName(type, subtype) {
+  if (type === 0x00) {
+    return subtype === 0x00 ? "app/factory"
+         : subtype === 0x10 ? "app/ota_0"
+         : subtype === 0x11 ? "app/ota_1"
+         : subtype === 0x20 ? "app/test"
+         : "app/0x" + subtype.toString(16);
+  }
+  if (type === 0x01) {
+    return subtype === 0x00 ? "data/ota"
+         : subtype === 0x01 ? "data/phy"
+         : subtype === 0x02 ? "data/nvs"
+         : subtype === 0x03 ? "data/coredump"
+         : subtype === 0x04 ? "data/nvs_keys"
+         : subtype === 0x05 ? "data/efuse"
+         : subtype === 0x80 ? "data/esphttpd"
+         : subtype === 0x81 ? "data/fat"
+         : subtype === 0x82 ? "data/spiffs"
+         : subtype === 0x83 ? "data/littlefs"
+         : "data/0x" + subtype.toString(16);
+  }
+  if (type === 0x40) return "0x40/0x00 (iap_cfg)";
+  if (type === 0x41) return "0x41 (自定义)";
+  return "0x" + type.toString(16) + "/0x" + subtype.toString(16);
+}
+
+/* -------------------------------------------------------------------------- */
+/* 分区表 CSV 解析                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** 分区类型名 -> 数值 */
+const PT_TYPE_NAMES = { app: 0x00, data: 0x01 };
+
+/** (类型名, 子类型名) -> 子类型数值 */
+const PT_SUBTYPE_NAMES = {
+  "app,factory": 0x00,
+  "app,ota_0":   0x10,
+  "app,ota_1":   0x11,
+  "app,test":    0x20,
+  "data,ota":    0x00,
+  "data,phy":    0x01,
+  "data,nvs":    0x02,
+  "data,coredump": 0x03,
+  "data,nvs_keys": 0x04,
+  "data,efuse":  0x05,
+  "data,undefined": 0x06,
+  "data,esphttpd": 0x80,
+  "data,fat":    0x81,
+  "data,spiffs": 0x82,
+  "data,littlefs": 0x83,
+};
+
+/**
+ * 解析分区表 CSV 文本为条目数组
+ *
+ * 支持 ESP-IDF 标准格式 (gen_esp32part.py 兼容):
+ *   # 注释行
+ *   Name, Type, SubType, Offset, Size, Flags
+ *   nvs,  data, nvs,     0x9000,  0x6000,
+ *   iap_cfg, 0x40, 0x00, 0x10000, 0x2000,
+ *
+ * 类型/子类型支持三种写法:
+ *   - 名称 (app / data / nvs / ota_0 ...)
+ *   - 十六进制 (0x40)
+ *   - 十进制 (64)
+ *
+ * Offset / Size 支持 0x 十六进制与十进制，Size 还支持 K / M 后缀。
+ *
+ * @param {string} text CSV 文本
+ * @returns {{ok:true, parts:Array}|{ok:false, reason:string}}
+ */
+function parsePartitionCsv(text) {
+  const parts = [];
+  const lines = text.split(/\r?\n/);
+
+  /** 解析数值: 支持 0x 前缀、K/M 后缀 */
+  const parseNum = (s) => {
+    if (!s) return null;
+    let t = s.trim();
+    if (!t) return null;
+    let mult = 1;
+    const m = t.match(/^(.+?)\s*([kKmM])$/);
+    if (m) {
+      t = m[1].trim();
+      mult = (m[2].toLowerCase() === "k") ? 1024 : 1024 * 1024;
+    }
+    let v;
+    if (/^0[xX]/.test(t)) {
+      v = parseInt(t, 16);
+    } else if (/^\d+$/.test(t)) {
+      v = parseInt(t, 10);
+    } else {
+      return null;
+    }
+    if (!Number.isFinite(v) || v < 0) return null;
+    return v * mult;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    if (!raw || raw.startsWith("#")) continue;
+
+    // 按逗号切分（CSV 里没有引号包裹的字段）
+    const f = raw.split(",").map(x => x.trim());
+    if (f.length < 5) continue;
+
+    const name = f[0];
+    if (!name) continue;
+
+    // --- 类型 ---
+    let type = parseNum(f[1]);
+    if (type === null) {
+      type = PT_TYPE_NAMES[f[1].toLowerCase()];
+    }
+    if (type === undefined || type === null) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 无法识别的类型 '" + f[1] + "'" };
+    }
+
+    // --- 子类型 ---
+    let subtype = parseNum(f[2]);
+    if (subtype === null) {
+      const key = f[1].toLowerCase() + "," + f[2].toLowerCase();
+      subtype = PT_SUBTYPE_NAMES[key];
+    }
+    if (subtype === undefined || subtype === null) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 无法识别的子类型 '" + f[2] + "'" };
+    }
+
+    // --- 偏移 / 大小 ---
+    const offset = parseNum(f[3]);
+    if (offset === null) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 无法解析偏移 '" + f[3] + "'" };
+    }
+    const size = parseNum(f[4]);
+    if (size === null || size <= 0) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 无法解析大小 '" + f[4] + "'" };
+    }
+
+    // --- 对齐检查 (4KB 扇区) ---
+    if (offset % 0x1000 !== 0) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 偏移 0x" +
+               offset.toString(16) + " 未按 4KB 对齐" };
+    }
+    if (size % 0x1000 !== 0) {
+      return { ok: false, reason: "第 " + (i + 1) + " 行: 大小 0x" +
+               size.toString(16) + " 未按 4KB 对齐" };
+    }
+
+    parts.push({ name, type, subtype, offset, size });
+  }
+
+  if (parts.length === 0) {
+    return { ok: false, reason: "CSV 中没有有效的分区条目" };
+  }
+
+  // --- 重叠检查 ---
+  const sorted = parts.slice().sort((a, b) => a.offset - b.offset);
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (a.offset + a.size > b.offset) {
+      return { ok: false, reason: "分区重叠: " + a.name + " (0x" +
+               (a.offset + a.size).toString(16) + ") 与 " + b.name +
+               " (0x" + b.offset.toString(16) + ")" };
+    }
+  }
+
+  return { ok: true, parts };
+}
+
+/**
+ * 由分区条目数组构造分区表二进制（4096 字节）
+ *
+ * 与 buildPartitionTableBin() 的区别: 这里不按 flash 容量推算，
+ * 而是直接使用 CSV 中的偏移与大小。
+ */
+function buildPartitionTableBinFromParts(parts) {
+  if (!parts || parts.length === 0) {
+    throw new Error("分区条目为空");
+  }
+  if (parts.length * PARTITION_ENTRY_SIZE + 32 > PARTITION_TABLE_SIZE) {
+    throw new Error("分区数量过多 (" + parts.length + ")，超出 4KB 分区表容量");
+  }
+
+  const entries = new Uint8Array(parts.length * PARTITION_ENTRY_SIZE);
+  const ev = new DataView(entries.buffer);
+
+  parts.forEach((p, i) => {
+    const base = i * PARTITION_ENTRY_SIZE;
+    ev.setUint16(base + 0, PARTITION_TABLE_MAGIC, true);
+    ev.setUint8(base + 2, p.type);
+    ev.setUint8(base + 3, p.subtype);
+    ev.setUint32(base + 4, p.offset, true);
+    ev.setUint32(base + 8, p.size, true);
+    const nb = new TextEncoder().encode(p.name);
+    entries.set(nb.subarray(0, 16), base + 12);
+    ev.setUint32(base + 28, 0, true);   // flags
+  });
+
+  const md5 = md5Bytes(entries);
+  const tail = new Uint8Array(32);
+  tail[0] = 0xEB; tail[1] = 0xEB;
+  tail.fill(0xFF, 2, 16);
+  tail.set(md5, 16);
+
+  const out = new Uint8Array(PARTITION_TABLE_SIZE);
+  out.fill(0xFF);
+  out.set(entries, 0);
+  out.set(tail, entries.length);
+  return out;
+}
+
+/**
+ * 校验 CSV 分区表是否符合 IAP 约束
+ *
+ * 规则 (见 partitions_iap.csv):
+ *   1. user_app 起始地址必须是 0x150000
+ *   2. user_app 之前的分区必须与 FIXED_PARTITIONS 完全一致
+ *   3. user_app 之后可以追加新分区
+ *
+ * @returns {{ok:true}|{ok:false, reason:string}}
+ */
+/**
+ * 校验分区表 CSV (v5: 支持表 A 与表 B)
+ *
+ * 表 A (IAP):  nvs + iap
+ * 表 B (APP):  nvs + user_app
+ *
+ * 自动按内容判定属于哪张表。
+ */
+function validateIapPartitionCsv(parts) {
+  const byName = {};
+  for (const p of parts) byName[p.name] = p;
+
+  const hasUserApp = !!byName["user_app"];
+  const hasIap = !!byName["iap"];
+
+  // --- 判定表类型 ---
+  if (hasUserApp && hasIap) {
+    return { ok: false, reason: "分区表同时含 iap 与 user_app —— " +
+             "表 A 与表 B 必须分开 (表 A 有 iap，表 B 有 user_app)" };
+  }
+  if (!hasUserApp && !hasIap) {
+    return { ok: false, reason: "分区表既无 iap 也无 user_app 分区" };
+  }
+
+  const isTableB = hasUserApp;
+  const tableName = isTableB ? "表 B (APP)" : "表 A (IAP)";
+
+  // --- 1. 主分区必须存在且偏移正确 ---
+  if (isTableB) {
+    const ua = byName["user_app"];
+    if (ua.offset !== USER_APP_ADDR) {
+      return { ok: false, reason: "user_app 偏移必须是 0x" +
+               USER_APP_ADDR.toString(16) + "，当前为 0x" + ua.offset.toString(16) };
+    }
+    if (ua.type !== 0x00 || ua.subtype !== 0x10) {
+      return { ok: false, reason: "user_app 必须是 app/ota_0 类型" };
+    }
+    // app 分区必须 64KB 对齐
+    if (ua.offset % 0x10000 !== 0 || ua.size % 0x10000 !== 0) {
+      return { ok: false, reason: "user_app 的 offset/size 必须按 64KB 对齐" };
+    }
+  } else {
+    const ia = byName["iap"];
+    if (ia.offset !== IAP_APP_OFFSET) {
+      return { ok: false, reason: "iap 偏移必须是 0x" +
+               IAP_APP_OFFSET.toString(16) + "，当前为 0x" + ia.offset.toString(16) };
+    }
+    if (ia.type !== 0x00 || ia.subtype !== 0x00) {
+      return { ok: false, reason: "iap 必须是 app/factory 类型" };
+    }
+    if (ia.offset % 0x10000 !== 0 || ia.size % 0x10000 !== 0) {
+      return { ok: false, reason: "iap 的 offset/size 必须按 64KB 对齐" };
+    }
+  }
+
+  // --- 2. 固定分区必须与预期布局一致 ---
+  //
+  // 表 A 的固定分区由本工具维护 (FIXED_PARTITIONS_A)；
+  // 表 B 的固定分区属于用户程序工程，这里只校验 nvs 位置。
+  const fixed = isTableB
+    ? [{ name: "nvs", type: 0x01, subtype: 0x02, offset: 0x141000, size: 0x3000 }]
+    : FIXED_PARTITIONS_A;
+
+  for (const fp of fixed) {
+    const p = byName[fp.name];
+    if (!p) {
+      return { ok: false, reason: tableName + " 缺少固定分区 '" + fp.name + "'" };
+    }
+    if (p.offset !== fp.offset || p.size !== fp.size ||
+        p.type !== fp.type || p.subtype !== fp.subtype) {
+      return { ok: false, reason: "固定分区 '" + fp.name + "' 被修改" +
+               "（应为 0x" + fp.offset.toString(16) + " / 0x" + fp.size.toString(16) +
+               "，实际 0x" + p.offset.toString(16) + " / 0x" + p.size.toString(16) + "）" };
+    }
+  }
+
+  // --- 3. 主分区之前不能有多余分区 ---
+  const fixedNames = new Set(fixed.map(p => p.name));
+  const mainName = isTableB ? "user_app" : "iap";
+  const mainOffset = isTableB ? USER_APP_ADDR : IAP_APP_OFFSET;
+  for (const p of parts) {
+    if (p.offset < mainOffset && !fixedNames.has(p.name)) {
+      return { ok: false, reason: mainName + " 之前不允许有额外分区 '" + p.name + "'" };
+    }
+  }
+
+  // --- 4. 主分区之后的分区不能重叠 ---
+  const main = byName[mainName];
+  for (const p of parts) {
+    if (p.name === mainName) continue;
+    if (p.offset < main.offset + main.size && p.offset >= main.offset) {
+      return { ok: false, reason: "分区 '" + p.name + "' 与 " + mainName + " 重叠" };
+    }
+  }
+
+  return { ok: true, table: isTableB ? "B" : "A" };
+}
+
+/**
+ * 判断字节流是否是「IAP 烧录文件」(iap_side.bin)
+ *
+ * 关键: iap_side.bin offset 0 是 bootloader，其首字节同样是 0xE9，
+ *       与用户程序 (纯 ESP 应用镜像) 无法仅凭首字节区分。
+ *
+ * 判据 (按可靠性排序):
+ *   1. 0x8000 处有配置区 magic (IAPC)  -> IAP 烧录文件
+ *   2. 0xB000 处有分区表 magic (0x50AA) -> 含分区表的整片固件
+ *   3. 文件长度 >= 0x20000 (128KB)      -> 用户程序不可能这么大
+ *
+ * 用户程序是单个 app 镜像，其 0x8000 / 0x10000 处是镜像内部数据，
+ * 不会恰好等于上述 magic。
+ */
+function looksLikeFullImage(bytes) {
+  // 判据 1: 分区表 magic
+  if (bytes.length >= PARTITION_TABLE_OFFSET + 2) {
+    const magic = bytes[PARTITION_TABLE_OFFSET] |
+                  (bytes[PARTITION_TABLE_OFFSET + 1] << 8);
+    if (magic === PARTITION_TABLE_MAGIC) return true;
+  }
+
+  // 判据 2: 配置区 magic (新版固件不含分区表时的唯一判据)
+  if (bytes.length >= CFG_OFFSET_IN_IMAGE + 4) {
+    const magicAt = new DataView(bytes.buffer, bytes.byteOffset + CFG_OFFSET_IN_IMAGE, 4)
+      .getUint32(0, true);
+    if (magicAt === CFG_MAGIC) return true;
+  }
+
+  // 判据 3: 长度 —— 用户程序不会超过 0x20000 (128KB) 起步的固件长度
+  // 注意: 这是兜底判据，仅在配置区为空且无分区表时生效
+  if (bytes.length >= IAP_APP_OFFSET) {
+    // 进一步确认: 0x10000 处应有 IAP 应用镜像 (0xE9)
+    if (bytes[IAP_APP_OFFSET] === 0xE9) return true;
+  }
+
+  return false;
+}
+
+// 标志位
+const FLAGS = [
+  { bit: 0,  name: "强制下载模式", desc: "置位则启动时直接进入 IAP" },
+  { bit: 1,  name: "WiFi AP",      desc: "使能 WiFi 热点" },
+  { bit: 2,  name: "I2C 从机",     desc: "使能 I2C 从机协议" },
+  { bit: 3,  name: "UART 终端",    desc: "使能串口终端" },
+  { bit: 4,  name: "启动校验", desc: "允许启动用户程序（合法性由 bootloader 自校验）" },
+  { bit: 5,  name: "GPIO 触发",    desc: "等待期间引脚为有效电平则进入 IAP" },
+  { bit: 6,  name: "I2C 触发",     desc: "等待期间收到 I2C 命令则进入 IAP" },
+  { bit: 7,  name: "UART 触发",    desc: "等待期间收到 UART 命令则进入 IAP" },
+  { bit: 8,  name: "WiFi 触发",    desc: "等待期间有客户端接入则进入 IAP" },
+  { bit: 9,  name: "USB 串口",     desc: "使能 USB 终端与烧录（仅 C3/C6/H2/S3）", usb: true },
+  { bit: 10, name: "USB 触发",     desc: "等待期间收到 USB 命令则进入 IAP", usb: true },
+];
+
+// 支持 USB-Serial-JTAG 的芯片
+const USB_CHIPS = ["esp32c3", "esp32c5", "esp32c6", "esp32c61", "esp32h2", "esp32s3"];
+
+const DEFAULTS = {
+  flags: (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),  // 0x79E
+  wait_seconds: 3,
+  wifi_ssid: "ESP-IAP",
+  wifi_password: "12345678",
+  wifi_channel: 1,
+  wifi_ip: "192.168.4.1",
+  wifi_netmask: "255.255.255.0",
+  i2c_scl_gpio: 7,
+  i2c_sda_gpio: 6,
+  i2c_addr: 0x42,
+  uart_port: 0,
+  uart_tx_gpio: 0xFF,   // 0xFF = 用该端口芯片默认引脚
+  uart_rx_gpio: 0xFF,
+  uart_baudrate: 115200,
+  trig_gpio: 0,         // GPIO0 = BOOT 键 (与固件 IAP_CFG_DEFAULT_TRIG_GPIO 一致)
+  trig_gpio_level: 0,   // 低电平触发
+  boot_param: "",
+  // 多 OTA 槽
+  active_slot: 0,
+  ota_slot_count: 1,
+  ota_gpio: 0xFF,       // 0xFF = 禁用 GPIO 选择
+  // 配置数据版本
+  data_ver: 0x0002,
+};
+
+/* ==========================================================================
+ * CRC32 (IEEE 802.3) —— 与设备端 iap_crc32() 一致
+ * ========================================================================== */
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes, start = 0, end = bytes.length) {
+  let c = 0xFFFFFFFF;
+  for (let i = start; i < end; i++) {
+    c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* ==========================================================================
+ * 工具函数
+ * ========================================================================== */
+const $ = (id) => document.getElementById(id);
+
+/* --------------------------------------------------------------------------
+ * 右上角消息弹窗 (toast)
+ *
+ * 保留 showStatus(msg, kind) 的调用方式，内部改为弹出右上角通知。
+ * kind: "ok" | "err" | "warn" | "info"
+ * ------------------------------------------------------------------------ */
+
+/** 各类型的默认标题与图标 */
+const TOAST_STYLE = {
+  ok:   { icon: "✓", title: "成功" },
+  err:  { icon: "✕", title: "错误" },
+  warn: { icon: "!", title: "警告" },
+  info: { icon: "i", title: "提示" },
+};
+
+/** 自动关闭时长 (ms)；错误类停留更久 */
+const TOAST_DURATION = { ok: 4000, info: 4000, warn: 6000, err: 8000 };
+
+/** 同一时刻最多显示的弹窗数，超出则移除最旧的 */
+const TOAST_MAX = 4;
+
+/**
+ * 弹出右上角消息
+ *
+ * @param {string} msg   消息正文（支持换行）
+ * @param {string} kind  ok | err | warn | info
+ * @param {object} [opt] { title, duration: 0=不自动关闭 }
+ */
+function showStatus(msg, kind = "info", opt = {}) {
+  const box = $("toasts");
+  if (!box) return;
+
+  const style = TOAST_STYLE[kind] || TOAST_STYLE.info;
+  const title = opt.title || style.title;
+
+  // 超出上限时移除最旧的
+  while (box.children.length >= TOAST_MAX) {
+    box.removeChild(box.firstChild);
+  }
+
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  icon.textContent = style.icon;
+
+  const body = document.createElement("div");
+  body.className = "toast-body";
+
+  const t = document.createElement("div");
+  t.className = "toast-title";
+  t.textContent = title;
+
+  const m = document.createElement("div");
+  m.className = "toast-msg";
+  m.textContent = msg;
+
+  body.appendChild(t);
+  body.appendChild(m);
+
+  const close = document.createElement("button");
+  close.className = "toast-close";
+  close.textContent = "×";
+  close.title = "关闭";
+
+  el.appendChild(icon);
+  el.appendChild(body);
+  el.appendChild(close);
+  box.appendChild(el);
+
+  /** 关闭并移除 */
+  const dismiss = () => {
+    if (!el.parentNode) return;
+    el.classList.add("hide");
+    setTimeout(() => el.remove(), 200);
+  };
+
+  close.addEventListener("click", dismiss);
+
+  const dur = opt.duration !== undefined ? opt.duration : (TOAST_DURATION[kind] || 4000);
+  if (dur > 0) {
+    const timer = setTimeout(dismiss, dur);
+    // 鼠标悬停时暂停自动关闭
+    el.addEventListener("mouseenter", () => clearTimeout(timer));
+  }
+
+  return el;
+}
+
+/** 关闭全部弹窗 */
+function hideStatus() {
+  const box = $("toasts");
+  if (!box) return;
+  box.innerHTML = "";
+}
+
+function hex32(v) { return "0x" + (v >>> 0).toString(16).toUpperCase().padStart(8, "0"); }
+function hex16(v) { return "0x" + (v & 0xFFFF).toString(16).toUpperCase().padStart(4, "0"); }
+function hex8(v)  { return "0x" + (v & 0xFF).toString(16).toUpperCase().padStart(2, "0"); }
+
+/** 格式化字节数为可读字符串 */
+function fmtBytes(n) {
+  if (n >= 1024 * 1024) {
+    const mb = n / (1024 * 1024);
+    return (Number.isInteger(mb) ? mb : mb.toFixed(2)) + " MB";
+  }
+  if (n >= 1024) return Math.round(n / 1024) + " KB";
+  return n + " B";
+}
+
+/** 解析 flash 容量字符串: "4MB" / "8M" / "0x800000" / 4194304 */
+function parseFlashSize(str) {
+  const s = String(str).trim().toUpperCase();
+  const m = s.match(/^(0X[0-9A-F]+|\d+)\s*(KB|MB|GB|K|M|G)?$/);
+  if (!m) throw new Error("无法解析 flash 容量: " + str);
+  const num = m[1].startsWith("0X") ? parseInt(m[1], 16) : parseInt(m[1], 10);
+  const unit = m[2] || "";
+  const mult = { "": 1, "K": 1024, "KB": 1024,
+                 "M": 1048576, "MB": 1048576,
+                 "G": 1073741824, "GB": 1073741824 }[unit];
+  return num * mult;
+}
+
+/**
+ * 纯 JS MD5 (RFC 1321)，用于分区表校验块
+ * 返回 16 字节 Uint8Array
+ */
+function md5Bytes(bytes) {
+  function rotl(x, c) { return (x << c) | (x >>> (32 - c)); }
+
+  const S = [
+    7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+    5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
+    4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+    6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21,
+  ];
+  const K = new Uint32Array(64);
+  for (let i = 0; i < 64; i++) {
+    K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) >>> 0;
+  }
+
+  const len = bytes.length;
+  // 填充: 0x80 + 0x00... + 64bit 长度(小端)
+  const withPad = (((len + 8) >> 6) + 1) << 6;
+  const msg = new Uint8Array(withPad);
+  msg.set(bytes);
+  msg[len] = 0x80;
+  const bitLenLo = (len * 8) >>> 0;
+  const bitLenHi = Math.floor(len / 536870912) >>> 0;
+  const mv = new DataView(msg.buffer);
+  mv.setUint32(withPad - 8, bitLenLo, true);
+  mv.setUint32(withPad - 4, bitLenHi, true);
+
+  let a0 = 0x67452301, b0 = 0xEFCDAB89, c0 = 0x98BADCFE, d0 = 0x10325476;
+
+  for (let chunk = 0; chunk < withPad; chunk += 64) {
+    const M = new Uint32Array(16);
+    for (let i = 0; i < 16; i++) M[i] = mv.getUint32(chunk + i * 4, true);
+
+    let A = a0, B = b0, C = c0, D = d0;
+    for (let i = 0; i < 64; i++) {
+      let F, g;
+      if (i < 16)      { F = (B & C) | (~B & D);        g = i; }
+      else if (i < 32) { F = (D & B) | (~D & C);        g = (5 * i + 1) % 16; }
+      else if (i < 48) { F = B ^ C ^ D;                 g = (3 * i + 5) % 16; }
+      else             { F = C ^ (B | ~D);              g = (7 * i) % 16; }
+      F = (F + A + K[i] + M[g]) >>> 0;
+      A = D; D = C; C = B;
+      B = (B + rotl(F, S[i])) >>> 0;
+    }
+    a0 = (a0 + A) >>> 0;
+    b0 = (b0 + B) >>> 0;
+    c0 = (c0 + C) >>> 0;
+    d0 = (d0 + D) >>> 0;
+  }
+
+  const out = new Uint8Array(16);
+  const ov = new DataView(out.buffer);
+  ov.setUint32(0, a0, true);
+  ov.setUint32(4, b0, true);
+  ov.setUint32(8, c0, true);
+  ov.setUint32(12, d0, true);
+  return out;
+}
+
+/** 点分十进制 -> 小端 u32 (a | b<<8 | c<<16 | d<<24) */
+function ipToU32(str) {
+  const p = String(str).trim().split(".");
+  if (p.length !== 4) throw new Error("IP 格式错误: " + str);
+  const v = p.map(x => {
+    if (!/^\d+$/.test(x)) throw new Error("IP 段非数字: " + x);
+    const n = parseInt(x, 10);
+    if (n < 0 || n > 255) throw new Error("IP 段越界: " + x);
+    return n;
+  });
+  return ((v[0] | (v[1] << 8) | (v[2] << 16) | (v[3] << 24)) >>> 0);
+}
+
+/** 小端 u32 -> 点分十进制 */
+function u32ToIp(v) {
+  v = v >>> 0;
+  return [(v & 0xFF), (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF].join(".");
+}
+
+/** 从字节数组读取以 \0 结尾的字符串 */
+function readCStr(bytes, off, maxLen) {
+  let end = off;
+  const lim = Math.min(off + maxLen, bytes.length);
+  while (end < lim && bytes[end] !== 0) end++;
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(off, end));
+}
+
+/** 写入字符串到字节数组（自动补 \0） */
+function writeCStr(bytes, off, maxLen, str) {
+  const enc = new TextEncoder().encode(str);
+  const n = Math.min(enc.length, maxLen - 1);
+  bytes.fill(0, off, off + maxLen);
+  bytes.set(enc.subarray(0, n), off);
+  return n;
+}
+
+/* ==========================================================================
+ * 解析 / 构造配置槽
+ * ========================================================================== */
+
+/** 解析单个槽，返回 { valid, seq, data, header } 或 { valid:false, reason } */
+function parseSlot(bytes, off) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset + off, SLOT_SIZE);
+
+  const magic      = dv.getUint32(0, true);
+  const version    = dv.getUint16(4, true);
+  const headerSize = dv.getUint16(6, true);
+  const seq        = dv.getUint32(8, true);
+  const dataSize   = dv.getUint32(12, true);
+  const dataCrc    = dv.getUint32(16, true);
+  const headerCrc  = dv.getUint32(20, true);
+
+  const header = { magic, version, headerSize, seq, dataSize, dataCrc, headerCrc };
+
+  if (magic !== CFG_MAGIC) {
+    return { valid: false, reason: "magic 不匹配 (" + hex32(magic) + ")", header };
+  }
+  if (headerSize !== HEADER_SIZE) {
+    return { valid: false, reason: "header_size 应为 " + HEADER_SIZE + "，实际 " + headerSize, header };
+  }
+  if (dataSize !== DATA_SIZE) {
+    return { valid: false, reason: "data_size 应为 " + DATA_SIZE + "，实际 " + dataSize, header };
+  }
+
+  // 头部 CRC 覆盖 [0..20)
+  const calcHdrCrc = crc32(bytes, off, off + 20);
+  if (calcHdrCrc !== headerCrc) {
+    return { valid: false, reason: "头部 CRC 错误 (计算 " + hex32(calcHdrCrc) + ")", header };
+  }
+
+  // 数据 CRC
+  const dOff = off + HEADER_SIZE;
+  const calcDataCrc = crc32(bytes, dOff, dOff + DATA_SIZE);
+  if (calcDataCrc !== dataCrc) {
+    return { valid: false, reason: "数据 CRC 错误 (计算 " + hex32(calcDataCrc) + ")", header };
+  }
+
+  return { valid: true, seq, data: bytes.slice(dOff, dOff + DATA_SIZE), header };
+}
+
+/** 从 612 字节数据解析出配置对象 */
+function decodeData(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+
+  const flags        = dv.getUint32(0, true);
+  const wait_seconds = dv.getUint16(4, true);
+
+  const i2c_scl_gpio = b[28];
+  const i2c_sda_gpio = b[29];
+  const i2c_addr     = b[30];
+  // 32..35: 原 i2c_freq_hz，已废弃（从机模式频率由主机决定）
+
+  const wifi_ssid     = readCStr(b, 44, 32);
+  const wifi_password = readCStr(b, 76, 64);
+  const wifi_channel  = b[140];
+  const wifi_ip       = u32ToIp(dv.getUint32(144, true));
+  const wifi_netmask  = u32ToIp(dv.getUint32(148, true));
+
+  const uart_port     = b[160];
+  const uart_tx_gpio  = b[161];
+  const uart_rx_gpio  = b[162];
+  const uart_baudrate = dv.getUint32(164, true);
+
+  const trig_gpio       = b[176];
+  const trig_gpio_level = b[177];
+
+  const bpLen = dv.getUint16(456, true);
+  const bpCrc = dv.getUint32(460, true);
+  const boot_param = readCStr(b, 200, Math.min(bpLen || BOOT_PARAM_SIZE, BOOT_PARAM_SIZE));
+
+  // 多 OTA 槽 (off 472)
+  const active_slot   = b[472];
+  const ota_slot_count = b[473];
+  const ota_gpio      = b[476];
+
+  // 槽加载地址/大小 (off 480 / 544, uint64 LE)
+  const slot_addr = [];
+  const slot_size = [];
+  for (let i = 0; i < OTA_SLOT_MAX; i++) {
+    // uint64 → Number (ESP32 为 32 位，高 32 位恒 0)
+    const lo = dv.getUint32(480 + i * 8, true);
+    const hi = dv.getUint32(480 + i * 8 + 4, true);
+    slot_addr.push(hi === 0 ? lo : 0);   // 高 32 位非 0 视为无效
+    slot_size.push(dv.getUint32(544 + i * 8, true));
+  }
+
+  // 配置数据版本 (off 608)
+  const data_ver = dv.getUint16(608, true);
+
+  // 附带只读信息
+  const user_app_size    = dv.getUint32(8, true);
+  const user_app_crc32   = dv.getUint32(12, true);
+  const user_app_version = dv.getUint32(16, true);
+  const boot_count       = dv.getUint32(20, true);
+  const last_boot_reason = dv.getUint32(24, true);
+
+  return {
+    flags, wait_seconds,
+    i2c_scl_gpio, i2c_sda_gpio, i2c_addr,
+    wifi_ssid, wifi_password, wifi_channel, wifi_ip, wifi_netmask,
+    uart_port, uart_tx_gpio, uart_rx_gpio, uart_baudrate,
+    trig_gpio, trig_gpio_level,
+    boot_param,
+    active_slot, ota_slot_count, ota_gpio,
+    slot_addr, slot_size,
+    data_ver,
+    _readonly: {
+      user_app_size, user_app_crc32, user_app_version,
+      boot_count, last_boot_reason, bpLen, bpCrc,
+    },
+  };
+}
+
+/** 把配置对象编码为 612 字节 */
+function encodeData(cfg) {
+  const b = new Uint8Array(DATA_SIZE);
+  const dv = new DataView(b.buffer);
+
+  dv.setUint32(0, cfg.flags >>> 0, true);
+  dv.setUint16(4, cfg.wait_seconds & 0xFFFF, true);
+  // 8..27: 用户程序信息，出厂编辑时保持 0（由设备运行时维护）
+  dv.setUint32(8, 0, true);
+  dv.setUint32(12, 0, true);
+  dv.setUint32(16, 0, true);
+  dv.setUint32(20, 0, true);
+  dv.setUint32(24, 0, true);
+
+  b[28] = cfg.i2c_scl_gpio & 0xFF;
+  b[29] = cfg.i2c_sda_gpio & 0xFF;
+  b[30] = cfg.i2c_addr & 0xFF;
+  // 32..35: 保留（原 i2c_freq_hz）
+
+  writeCStr(b, 44, 32, cfg.wifi_ssid);
+  writeCStr(b, 76, 64, cfg.wifi_password);
+  b[140] = cfg.wifi_channel & 0xFF;
+  dv.setUint32(144, ipToU32(cfg.wifi_ip), true);
+  dv.setUint32(148, ipToU32(cfg.wifi_netmask), true);
+
+  b[160] = cfg.uart_port & 0xFF;
+  b[161] = cfg.uart_tx_gpio & 0xFF;
+  b[162] = cfg.uart_rx_gpio & 0xFF;
+  dv.setUint32(164, cfg.uart_baudrate >>> 0, true);
+
+  b[176] = cfg.trig_gpio & 0xFF;
+  b[177] = cfg.trig_gpio_level & 0xFF;
+
+  const bp = new TextEncoder().encode(cfg.boot_param || "");
+  const bpLen = Math.min(bp.length, BOOT_PARAM_SIZE - 1);
+  b.set(bp.subarray(0, bpLen), 200);
+  dv.setUint16(456, bpLen, true);
+  b[458] = 0;   // boot_param_flags
+  b[459] = 0;   // boot_param_reserved
+  dv.setUint32(460, bpLen > 0 ? crc32(b, 200, 200 + bpLen) : 0, true);
+
+  // 多 OTA 槽 (off 472)
+  b[472] = (cfg.active_slot   ?? 0) & 0xFF;
+  b[473] = (cfg.ota_slot_count ?? 1) & 0xFF;
+  b[476] = (cfg.ota_gpio === undefined ? 0xFF : cfg.ota_gpio) & 0xFF;
+
+  // 槽加载地址/大小 (off 480 / 544, uint64 LE)
+  const addrs = Array.isArray(cfg.slot_addr) ? cfg.slot_addr : [];
+  const sizes = Array.isArray(cfg.slot_size) ? cfg.slot_size : [];
+  for (let i = 0; i < OTA_SLOT_MAX; i++) {
+    const a = Number(addrs[i] || 0) >>> 0;
+    const s = Number(sizes[i] || 0) >>> 0;
+    dv.setUint32(480 + i * 8, a, true);
+    dv.setUint32(480 + i * 8 + 4, 0, true);      // 高 32 位恒 0 (32 位芯片)
+    dv.setUint32(544 + i * 8, s, true);
+    dv.setUint32(544 + i * 8 + 4, 0, true);
+  }
+
+  // 配置数据版本 (off 608)
+  dv.setUint16(608, cfg.data_ver ?? CFG_DATA_VER, true);
+
+  return b;
+}
+
+/** 构造完整配置槽 (4096 字节) */
+function buildSlot(data, seq, erase = false) {
+  const slot = new Uint8Array(SLOT_SIZE);
+  if (erase) { slot.fill(0xFF); return slot; }
+
+  const dv = new DataView(slot.buffer);
+  dv.setUint32(0, CFG_MAGIC, true);
+  dv.setUint16(4, CFG_VERSION, true);
+  dv.setUint16(6, HEADER_SIZE, true);
+  dv.setUint32(8, seq, true);
+  dv.setUint32(12, DATA_SIZE, true);
+  dv.setUint32(16, crc32(data), true);
+  dv.setUint32(20, crc32(slot, 0, 20), true);   // header_crc 覆盖 [0..20)
+
+  slot.set(data, HEADER_SIZE);
+  slot.fill(0xFF, HEADER_SIZE + DATA_SIZE);
+  return slot;
+}
+
+/** 构造完整配置分区 (8192 字节): 槽0=配置(seq=1), 槽1=擦除 */
+function buildPartition(cfg) {
+  const out = new Uint8Array(CFG_PART_SIZE);
+  out.set(buildSlot(encodeData(cfg), 1), 0);
+  out.set(buildSlot(null, 0, true), SLOT_SIZE);
+  return out;
+}
+
+/* ==========================================================================
+ * 文件状态（配置编辑用）
+ * ========================================================================== */
+let fileState = null;
+/* {
+     name, bytes,          // 原始文件字节
+     cfgOffset,            // 配置区在文件中的偏移
+     isFullImage,          // true=含 IAP 程序, false=独立配置区
+     originalCfg,          // 打开时的配置（用于"恢复"）
+     slots,                // 两个槽的解析结果
+   } */
+
+/* ==========================================================================
+ * 烧录槽位模型 (v5 两文件方案)
+ *
+ * 两个槽位，按顺序烧录:
+ *   0. boot   IAP 烧录文件  -> 0x000000 (iap_side.bin, 0x0 ~ 0x13FFFF)
+ *                            = bootloader + 配置区 + 分区表 A + IAP 程序
+ *   1. app    用户程序      -> 0x150000 (user.bin)
+ *
+ * 每个槽位保存:
+ *   { name, bytes, kind, addr, ... }
+ *   kind: "iapSide" | "cfg" | "app"
+ *
+ * 所有文件都必须能识别出已知格式，禁止未知格式。
+ * ========================================================================== */
+const SLOTS = {
+  boot:   null,   // { name, bytes, info } —— iap_side.bin (0x0 ~ 0x13FFFF)
+  app:    null,   // { name, bytes, info }
+};
+
+/** 槽位勾选状态 (默认全部不勾选，由用户主动选择要烧录的槽位) */
+const SLOT_ENABLED = {
+  boot:   false,
+  app:    false,
+};
+
+/** 勾选框 ID */
+const SLOT_CHK_ID = {
+  boot:   "biChkBoot",
+  app:    "biChkApp",
+};
+
+/** 槽位配置: 显示名 + 地址 (v5 两文件方案) */
+const SLOT_DEFS = {
+  boot:   { title: "IAP 烧录文件", addr: "0x000000" },
+  app:    { title: "用户程序",     addr: "0x150000" },
+};
+
+/** 槽位渲染顺序 (与页面显示一致) */
+const SLOT_ORDER = ["boot", "app"];
+
+/* ==== BEGIN BUILTIN BOOTLOADERS (auto-generated) ==== */
+/*
+ * v6: 内置镜像改为**惰性加载**。
+ *
+ *   esp_iap_builtin.js  → 仅索引 (window.BUILTIN_MANIFEST, 几 KB)
+ *   assets/iap_img_<chip>.js   → 单个芯片的镜像数据 (首次需要时才注入 <script>)
+ *
+ * BUILTIN_BOOTLOADERS 仅为兼容旧内嵌模式保留 (通常为空)。
+ *
+ * 重新生成:
+ *   python tools/gen_boot_embed.py --out-js esp_iap_builtin.js --out-dir .
+ */
+const BUILTIN_BOOTLOADERS =
+  (typeof window !== "undefined" && window.BUILTIN_BOOTLOADERS)
+    ? window.BUILTIN_BOOTLOADERS
+    : {};
+/* ==== END BUILTIN BOOTLOADERS ==== */
+
+
+/* ==========================================================================
+ * 内置 IAP 镜像 (Base64 嵌入, 由 tools/gen_boot_embed.py 生成)
+ *
+ * v6: 嵌入的是**完整 iap_side.bin** (含 IAP 程序), 可直接烧录启动。
+ * ========================================================================== */
+
+/**
+ * 将 FLASHER.chip 归一化为 BUILTIN_BOOTLOADERS 的键
+ *
+ * esptool-js 的 getChipDescription() 返回形如:
+ *   "ESP32-D0WD-V3 (revision 3)"       -> esp32
+ *   "ESP32-S2 (revision v0.0)"         -> esp32s2
+ *   "ESP32-S3 (QFN56) (revision v0.2)" -> esp32s3
+ *   "ESP32-C3 (QFN32) (revision v0.4)" -> esp32c3
+ *   "ESP32-C6 (QFN40) (revision v0.1)" -> esp32c6
+ *   "ESP32-H2 (revision v0.1)"         -> esp32h2
+ * 未连接 (null) / 未知芯片 -> null
+ */
+function chipKeyFromName(chip) {
+  if (!chip) return null;
+  const s = String(chip).toUpperCase();
+
+  // 1) 系列标记 "ESP32-C6" / "ESP32-S3" / "ESP32-H2" 等 (C/C/H/S + 数字)
+  const m = s.match(/ESP32-([CCHS])(\d+)/);
+  if (m) {
+    const key = ("esp32" + m[1] + m[2]).toLowerCase();
+    // 已知系列 (esp32c2/c3/c5/c6/h2/s2/s3) 直接返回;
+    // "ESP32-S0WD" 是单核 ESP32 变体 -> 归入 esp32;
+    // 其余未知系列 (c61/h21/p4 等) 返回 null, 不落入裸 ESP32 回退。
+    //
+    // ⚠️ v6 惰性模式下 BUILTIN_BOOTLOADERS 为空, 必须用 builtinMeta()
+    //    查询 BUILTIN_MANIFEST.chips, 否则永远返回 null。
+    if (builtinMeta(key)) return key;
+    if (key === "esp32s0") return "esp32";
+    return null;
+  }
+
+  // 2) 回退: 裸 ESP32 (无系列后缀, 如 "ESP32-D0WD-V3" / "ESP32-PICO-D4" / "ESP32-S0WD")
+  //    esptool-js 也可能返回 "ESP32 (revision 3)" 这类带空格的形式,
+  //    因此先截断到第一个空白/括号再判断。
+  const head = s.split(/[\s(]/)[0];
+  if (head === "ESP32" || /^ESP32-(D|U|PICO|S0)/.test(head)) {
+    if (builtinMeta("esp32")) return "esp32";
+  }
+
+  return null;
+}
+
+/** 解码 Base64 为 Uint8Array */
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * 解压 zlib (deflate) 数据
+ *
+ * v6: 内置 IAP 镜像经 zlib 压缩后 base64 存放 (1280KB -> ~600KB)。
+ *     使用浏览器原生 DecompressionStream("deflate")，无需外部库。
+ *
+ * @param {Uint8Array} bytes 压缩数据
+ * @returns {Promise<Uint8Array>} 解压后数据
+ */
+async function inflateBytes(bytes) {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("当前浏览器不支持 DecompressionStream，请使用 Chrome/Edge 89+");
+  }
+  const ds = new DecompressionStream("deflate");
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+/**
+ * 取得某个芯片的内置 IAP 镜像 (已解压)
+ *
+ * v6: **惰性加载** —— 默认只加载索引 (esp_iap_builtin.js, 几 KB)，
+ *     首次需要某芯片时才注入 <script src="assets/iap_img_<chip>.js"> 拉取数据。
+ *
+ * 自动处理: 按需加载 -> base64 解码 -> zlib 解压 -> 校验大小。
+ * 结果做缓存，避免重复加载/解压。
+ *
+ * @param {string} key 芯片键 (如 "esp32c6")
+ * @returns {Promise<Uint8Array|null>}
+ */
+const _builtinCache = new Map();
+const _chipDataLoading = new Map();
+
+/** 按需注入 <script src="assets/iap_img_<chip>.js"> 并等待其执行 */
+function loadChipDataScript(key) {
+  if (_chipDataLoading.has(key)) return _chipDataLoading.get(key);
+
+  const p = new Promise((resolve, reject) => {
+    // 已加载过 (例如重复调用)
+    if (window.BUILTIN_CHIP_DATA && window.BUILTIN_CHIP_DATA[key]) {
+      resolve(true);
+      return;
+    }
+
+    const s = document.createElement("script");
+    s.src = "assets/iap_img_" + key + ".js";
+    s.async = true;
+    s.onload = () => {
+      const ok = !!(window.BUILTIN_CHIP_DATA && window.BUILTIN_CHIP_DATA[key]);
+      ok ? resolve(true) : reject(new Error("数据文件中无 " + key));
+    };
+    s.onerror = () => reject(new Error(
+      "无法加载 assets/iap_img_" + key + ".js（请确认 assets/ 目录与 HTML 同目录）"));
+    document.head.appendChild(s);
+  });
+
+  _chipDataLoading.set(key, p);
+  return p;
+}
+
+async function getBuiltinImage(key) {
+  if (_builtinCache.has(key)) return _builtinCache.get(key);
+
+  // 索引中是否存在该芯片
+  const meta = (window.BUILTIN_MANIFEST &&
+                window.BUILTIN_MANIFEST.chips &&
+                window.BUILTIN_MANIFEST.chips[key]) || null;
+  const legacy = BUILTIN_BOOTLOADERS[key];   // 兼容内嵌模式
+  if (!meta && !legacy) return null;
+
+  // --- 惰性加载数据文件 ---
+  let entry = (window.BUILTIN_CHIP_DATA && window.BUILTIN_CHIP_DATA[key]) || null;
+  if (!entry) {
+    if (meta) {
+      try {
+        await loadChipDataScript(key);
+      } catch (e) {
+        showStatus(e.message, "err");
+        return null;
+      }
+      entry = window.BUILTIN_CHIP_DATA[key];
+    } else {
+      entry = legacy;   // 内嵌模式: 数据就在 BUILTIN_BOOTLOADERS 里
+    }
+  }
+  if (!entry) return null;
+
+  let bytes = b64ToBytes(entry.data);
+
+  // 压缩数据: 解压后应等于 raw (若声明了 raw 字段)
+  if (entry.raw) {
+    try {
+      bytes = await inflateBytes(bytes);
+    } catch (e) {
+      showStatus("内置镜像解压失败: " + e.message, "err");
+      return null;
+    }
+    if (bytes.length !== entry.raw) {
+      showStatus("内置镜像解压后大小不符: " + bytes.length +
+                 " != " + entry.raw, "err");
+      return null;
+    }
+  }
+
+  _builtinCache.set(key, bytes);
+  return bytes;
+}
+
+/** 当前 bootloader 模式: "builtin" | "manual" */
+let bootMode = "builtin";
+
+/**
+ * 内置 IAP 镜像的芯片类型手动覆盖值
+ *
+ * null  = 自动 (按 FLASHER.chip 检测结果)
+ * 其它  = BUILTIN_BOOTLOADERS 的键 (如 "esp32c6")
+ */
+let bootChipOverride = null;
+
+/** 内置 IAP 镜像支持的芯片列表 (按 BOOT_CHIP_ORDER 顺序) */
+const BOOT_CHIP_ORDER = ["esp32", "esp32s2", "esp32s3", "esp32c2",
+                         "esp32c3", "esp32c5", "esp32c6", "esp32h2"];
+
+/**
+ * 查询某芯片的索引元数据 (来自 esp_iap_builtin.js 的 BUILTIN_MANIFEST)
+ *
+ * 兼容两种模式:
+ *   v6 惰性: window.BUILTIN_MANIFEST.chips[key]  (仅元数据)
+ *   旧内嵌:  BUILTIN_BOOTLOADERS[key]            (含数据)
+ *
+ * @returns {{size:number, raw?:number, src?:string}|null}
+ */
+function builtinMeta(key) {
+  if (!key) return null;
+  const m = window.BUILTIN_MANIFEST;
+  if (m && m.chips && m.chips[key]) return m.chips[key];
+  if (BUILTIN_BOOTLOADERS[key]) return BUILTIN_BOOTLOADERS[key];
+  return null;
+}
+
+/** 是否有某芯片的内置镜像可用 */
+function hasBuiltinChip(key) {
+  return !!builtinMeta(key);
+}
+
+/** 芯片键 -> 显示名 */
+function bootChipLabel(key) {
+  const map = {
+    esp32: "ESP32", esp32s2: "ESP32-S2", esp32s3: "ESP32-S3",
+    esp32c2: "ESP32-C2", esp32c3: "ESP32-C3", esp32c5: "ESP32-C5",
+    esp32c6: "ESP32-C6", esp32h2: "ESP32-H2",
+  };
+  return map[key] || key.toUpperCase();
+}
+
+/**
+ * 解析当前生效的内置 IAP 镜像芯片键
+ *
+ * 优先使用手动覆盖值 (bootChipOverride)，否则按设备检测结果自动推断。
+ *
+ * @returns {string|null}
+ */
+function resolveBootChipKey() {
+  if (bootChipOverride && hasBuiltinChip(bootChipOverride)) {
+    return bootChipOverride;
+  }
+  return chipKeyFromName(FLASHER.chip);
+}
+
+/** 填充「芯片类型」下拉框 (含"自动"选项) */
+function fillBootChipSelect() {
+  const sel = $("bootChipSelect");
+  if (!sel) return;
+  if (sel.dataset.filled === "1") return;   // 只填一次
+
+  const auto = chipKeyFromName(FLASHER.chip);
+  const opts = ['<option value="">自动' +
+    (auto ? "（" + bootChipLabel(auto) + "）" : "（连接设备后识别）") +
+    "</option>"];
+  for (const k of BOOT_CHIP_ORDER) {
+    const meta = builtinMeta(k);
+    if (!meta) continue;
+    opts.push('<option value="' + k + '">' + bootChipLabel(k) +
+              "（" + fmtBytes(meta.size) + "）</option>");
+  }
+  sel.innerHTML = opts.join("");
+  sel.dataset.filled = "1";
+  sel.value = bootChipOverride || "";
+}
+
+/** 刷新「自动」选项文字 (连接/断开后芯片可能变化) */
+function refreshBootChipAutoLabel() {
+  const sel = $("bootChipSelect");
+  if (!sel || !sel.options.length) return;
+  const auto = chipKeyFromName(FLASHER.chip);
+  sel.options[0].textContent = "自动" +
+    (auto ? "（" + bootChipLabel(auto) + "）" : "（连接设备后识别）");
+}
+
+/** 读取 bootloader 模式单选框 */
+function getBootModeUI() {
+  const el = document.querySelector('input[name="bootMode"]:checked');
+  return el ? el.value : "builtin";
+}
+
+/** 刷新槽位 0 的模式相关 UI (标签 / 按钮可用性 / 提示) */
+function renderBootMode() {
+  const key = resolveBootChipKey();
+  const builtin = builtinMeta(key);
+
+  const label = $("bootBuiltinLabel");
+  const rbBuiltin = $("bootModeBuiltin");
+  const btnPick = $("btnBootPick");
+  const btnExport = $("btnBootExport");
+  const hintBuiltin = $("bootBuiltinHint");
+  const hintManual = $("bootHint");
+  const chipRow = $("bootChipRow");
+  const chipNote = $("bootChipNote");
+
+  // 内置标签: 显示芯片名 + 大小
+  if (label) {
+    if (builtin) {
+      label.textContent = "使用内置 IAP 镜像 (" + bootChipLabel(key) + ", " +
+                          fmtBytes(builtin.size) + ")";
+    } else if (FLASHER.connected) {
+      label.textContent = "使用内置 IAP 镜像 (该芯片无内置数据)";
+    } else {
+      label.textContent = "使用内置 IAP 镜像 (连接设备后自动选择)";
+    }
+  }
+  if (rbBuiltin) {
+    // 无内置数据时仍可选中，但会提示改用手动
+    rbBuiltin.disabled = false;
+  }
+
+  const manual = bootMode === "manual";
+
+  // 芯片类型下拉框: 仅内置模式显示
+  fillBootChipSelect();
+  refreshBootChipAutoLabel();
+  if (chipRow) chipRow.classList.toggle("hidden", manual);
+  if (chipNote) {
+    if (bootChipOverride) {
+      chipNote.textContent = "已手动指定（忽略设备检测结果）";
+    } else if (FLASHER.connected && chipKeyFromName(FLASHER.chip)) {
+      chipNote.textContent = "已按设备自动选择";
+    } else if (FLASHER.connected) {
+      chipNote.textContent = "设备芯片无内置数据，请手动指定";
+    } else {
+      chipNote.textContent = "";
+    }
+  }
+
+  if (btnPick) btnPick.disabled = !manual;
+  if (btnExport) btnExport.disabled = !builtin;
+  if (hintBuiltin) hintBuiltin.style.display = manual ? "none" : "";
+  if (hintManual) hintManual.style.display = manual ? "" : "none";
+
+  // 区域跳过选项: 内置/手动模式都可用 (两种模式都产出完整 iap_side.bin)
+  syncSkipCheckboxes();
+}
+
+/**
+ * 把 SIDE_SKIP 状态同步到复选框
+ *
+ * 复选框初始状态由 SIDE_SKIP 决定 (默认跳过配置区)，
+ * 这里保证 JS 状态与 DOM 一致 (含页面加载 / 状态重置后)。
+ */
+function syncSkipCheckboxes() {
+  Object.keys(SIDE_SKIP_CHK).forEach(key => {
+    const chk = $(SIDE_SKIP_CHK[key]);
+    if (chk) chk.checked = !!SIDE_SKIP[key];
+  });
+}
+
+/**
+ * 按当前生效的芯片键载入内置 IAP 烧录文件
+ *
+ * v6: 内置数据是**完整的 iap_side.bin** (0x0 ~ 0x13FFFF)，包含:
+ *       [0x0000 ~ 0x7FFF]  bootloader
+ *       [0x8000 ~ 0x9FFF]  iap_cfg (出厂默认配置)
+ *       [0xA000 ~ 0xAFFF]  0xFF 填充 (保留)
+ *       [0xB000 ~ 0xBFFF]  分区表 A
+ *       [0xC000 ~ 0xFFFF]  0xFF 填充 (nvs 首次启动自动初始化)
+ *       [0x10000 ~ 0x13FFFF] IAP 程序
+ *
+ *     ✅ 直接烧录即可启动，无需额外烧 IAP 程序。
+ *
+ *     配置区若需用当前表单的值，可勾选「不烧配置区」跳过，或用手动模式。
+ *
+ * @returns {boolean} 是否成功载入
+ */
+async function loadBuiltinBootloader() {
+  const key = resolveBootChipKey();
+  if (!key) return false;
+  const meta = builtinMeta(key);
+  if (!meta) return false;
+
+  // 按需加载 + 解压 (v6: 数据在 assets/iap_img_<chip>.js, 首次才拉取)
+  const side = await getBuiltinImage(key);
+  if (!side) return false;
+
+  // 完整性检查: 必须是完整固定区大小
+  if (side.length < FIXED_REGION_END) {
+    showStatus("内置 IAP 镜像不完整 (" + fmtBytes(side.length) +
+               " < " + fmtBytes(FIXED_REGION_END) + ")", "err");
+    return false;
+  }
+
+  const srcLabel = meta.src === "iap_side.bin"
+    ? "预构建 iap_side.bin"
+    : "自动合成";
+
+  SLOTS.boot = {
+    name: "iap_side.bin (内置完整 IAP 镜像, " + srcLabel + ")",
+    bytes: side,
+    info: parseIapImageHeader(side),
+    builtin: true,
+    chipKey: key,
+    cfgOffset: CFG_OFFSET_IN_IMAGE,
+    segBase: 0,
+  };
+  return true;
+}
+
+/** 导出当前生效芯片的内置 IAP 镜像为文件 */
+async function exportBuiltinBootloader() {
+  const key = resolveBootChipKey();
+  if (!key) { showStatus("未连接设备或无法识别芯片，请先指定芯片类型", "err"); return; }
+  const meta = builtinMeta(key);
+  if (!meta) { showStatus("该芯片没有内置 IAP 镜像数据", "err"); return; }
+
+  showStatus("正在加载 " + bootChipLabel(key) + " 镜像数据...", "info");
+  const bytes = await getBuiltinImage(key);
+  if (!bytes) return;
+
+  downloadBytes(bytes, "iap_side_" + key + ".bin");
+  showStatus("已导出内置 IAP 镜像：" + key + " (" + fmtBytes(bytes.length) + ")", "ok");
+}
+
+/**
+ * 设置内置 IAP 镜像的芯片类型
+ *
+ * @param {string} key 芯片键, 或 "" 表示自动 (按设备检测)
+ */
+async function setBootChip(key, opts) {
+  opts = opts || {};
+  bootChipOverride = key || null;
+  const sel = $("bootChipSelect");
+  if (sel) sel.value = bootChipOverride || "";
+
+  if (bootMode !== "builtin") {
+    renderBootMode();
+    return;
+  }
+
+  if (await loadBuiltinBootloader()) {
+    renderBootMode();
+    renderSlots();
+    if (!opts.silent) {
+      showStatus("已载入内置 IAP 镜像：" + SLOTS.boot.name +
+                 "\n  " + fmtBytes(SLOTS.boot.bytes.length), "ok");
+    }
+  } else {
+    if (SLOTS.boot && SLOTS.boot.builtin) SLOTS.boot = null;
+    renderBootMode();
+    renderSlots();
+    if (!opts.silent) showStatus("请选择芯片类型或切换到「手动选择文件」", "warn");
+  }
+}
+
+/**
+ * 应用 bootloader 模式
+ *
+ * builtin: 按芯片 (自动或手动指定) 载入内置数据
+ * manual : 清空内置数据, 等待用户选择文件
+ */
+async function applyBootMode(mode, opts) {
+  opts = opts || {};
+  bootMode = mode;
+
+  if (mode === "builtin") {
+    if (await loadBuiltinBootloader()) {
+      renderBootMode();
+      renderSlots();
+      if (!opts.silent) {
+        showStatus("已载入内置 IAP 镜像：" + SLOTS.boot.name +
+                   "\n  " + fmtBytes(SLOTS.boot.bytes.length), "ok");
+      }
+    } else {
+      // 未连接 / 无内置数据 —— 清空并提示
+      if (SLOTS.boot && SLOTS.boot.builtin) SLOTS.boot = null;
+      renderBootMode();
+      renderSlots();
+      if (!opts.silent) {
+        showStatus(
+          FLASHER.connected
+            ? "该芯片 (" + (FLASHER.chip || "?") + ") 没有内置 IAP 镜像数据，请在上方「芯片类型」中手动指定，或切换到「手动选择文件」。"
+            : "请连接设备以自动选择内置 IAP 镜像，或在上方「芯片类型」中手动指定。",
+          "warn"
+        );
+      }
+    }
+  } else {
+    if (SLOTS.boot && SLOTS.boot.builtin) SLOTS.boot = null;
+    renderBootMode();
+    renderSlots();
+    if (!opts.silent) showStatus("请选择 IAP 烧录文件 (iap_side.bin, 1280KB)", "info");
+  }
+}
+
+/** 当前正在选择文件的槽位 (用于隐藏 input 的 change 处理) */
+let pickTarget = null;
+
+/* ==========================================================================
+ * 文件识别 —— 严格校验，禁止未知格式
+ * ========================================================================== */
+
+/**
+ * 快速判断字节流是否是用户程序（纯 ESP 应用镜像）
+ *
+ * 首字节为 ESP 镜像 magic 0xE9 即认为是应用镜像。
+ */
+function looksLikeUserApp(bytes) {
+  if (bytes.length < 24) return false;
+  return bytes[0] === 0xE9;
+}
+
+/**
+ * 识别文件类型 (v6 两文件方案)
+ *
+ * 支持的文件:
+ *   iap_side.bin     IAP 烧录文件 (0x0 ~ 0x13FFFF)
+ *                    = bootloader + 配置区 + 分区表 A + IAP 程序
+ *   iap_cfg.bin      独立配置区 (8KB, magic IAPC)
+ *   user.bin         用户程序 (**从 0x140000 开始的完整镜像**)
+ *                    = 分区表 B + 0xFF 填充 + 应用镜像
+ *
+ * @returns {{ok:true, kind:string, ...}|{ok:false, reason:string}}
+ *   kind: "iapSide" | "cfg" | "app"
+ */
+function identifyFile(bytes) {
+  if (!bytes || bytes.length < 16) {
+    return { ok: false, reason: "文件太小 (" + (bytes ? bytes.length : 0) + " 字节)" };
+  }
+
+  const magic0 = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+  const firstByte = bytes[0];
+
+  // --- 1. IAP 烧录文件 (0x0 起, 首字节 0xE9, 0x8000 处有配置区 magic) ---
+  if (firstByte === 0xE9 && bytes.length >= CFG_OFFSET_IN_IMAGE + 4) {
+    const cfgAtImage = new DataView(
+      bytes.buffer, bytes.byteOffset + CFG_OFFSET_IN_IMAGE, 4).getUint32(0, true);
+    if (cfgAtImage === CFG_MAGIC) {
+      const info = parseIapImageHeader(bytes);
+      if (!info.valid) {
+        return { ok: false, reason: "IAP 烧录文件头无效: " + info.reason };
+      }
+      return { ok: true, kind: "iapSide", info, cfgOffset: CFG_OFFSET_IN_IMAGE,
+               isFullImage: true, segBase: 0, isIapSide: true };
+    }
+  }
+
+  // --- 2. 独立配置区 (8KB, 首 4 字节 magic) ---
+  if (bytes.length === CFG_PART_SIZE && magic0 === CFG_MAGIC) {
+    return { ok: true, kind: "cfg", cfgOffset: 0, isFullImage: false };
+  }
+
+  // --- 3. 用户程序 (v6: 从 0x140000 开始的完整镜像) ---
+  //
+  // 布局: 0x0000 分区表 B (magic 0x50AA) + 0x10000 应用镜像 (0xE9)
+  {
+    const VAR_APP_OFF = USER_APP_ADDR - FIXED_REGION_END;   // 0x10000
+
+    if (bytes.length >= VAR_APP_OFF + 24) {
+      const ptMagic = new DataView(bytes.buffer, bytes.byteOffset, 2).getUint16(0, true);
+      const appMagic = bytes[VAR_APP_OFF];
+
+      if (ptMagic === 0x50AA && appMagic === 0xE9) {
+        const info = parseIapImageHeader(bytes.subarray
+          ? bytes.subarray(VAR_APP_OFF) : bytes.slice(VAR_APP_OFF));
+        if (!info.valid) {
+          return { ok: false, reason: "用户程序镜像头无效: " + info.reason };
+        }
+        return { ok: true, kind: "app", info, isVarImage: true,
+                 varBase: FIXED_REGION_END, appOffset: VAR_APP_OFF };
+      }
+    }
+  }
+
+  // --- 4. 兼容: 纯 ESP 应用镜像 (旧格式, 首字节 0xE9) ---
+  if (firstByte === 0xE9) {
+    const info = parseIapImageHeader(bytes);
+    if (!info.valid) {
+      return { ok: false, reason: "ESP 镜像头无效: " + info.reason };
+    }
+    return { ok: true, kind: "app", info, isVarImage: false };
+  }
+
+  // 未知格式
+  return {
+    ok: false,
+    reason: "未知格式 (首字节 0x" + firstByte.toString(16).toUpperCase().padStart(2, "0") +
+            ", 长度 " + bytes.length + " 字节)。" +
+            "用户程序须为从 0x140000 开始的完整镜像（用 build_user_app.py 打包）",
+  };
+}
+
+/* ==========================================================================
+ * 槽位渲染
+ * ========================================================================== */
+function renderSlot(slot) {
+  const def = SLOT_DEFS[slot];
+  const item = document.querySelector('.burnitem[data-slot="' + slot + '"]');
+  const cap = slot.charAt(0).toUpperCase() + slot.slice(1);
+  const stateEl = $("biState" + cap);
+  const fileEl = $("biFile" + cap);
+  const chkEl = $(SLOT_CHK_ID[slot]);
+  if (!item || !stateEl || !fileEl) return;
+
+  const f = SLOTS[slot];
+  item.classList.remove("filled", "error");
+
+  // 勾选框: 始终可勾选 (勾选状态与是否有文件独立)
+  if (chkEl) {
+    chkEl.checked = SLOT_ENABLED[slot];
+  }
+  item.classList.toggle("checked", SLOT_ENABLED[slot]);
+
+  if (!f) {
+    stateEl.textContent = SLOT_ENABLED[slot] ? "未选择" : "已跳过";
+    stateEl.className = SLOT_ENABLED[slot] ? "bi-state" : "bi-state warn";
+    fileEl.textContent = "—";
+    return;
+  }
+
+  if (f.error) {
+    item.classList.add("error");
+    stateEl.textContent = "格式错误";
+    stateEl.className = "bi-state err";
+    fileEl.textContent = f.name + " — " + f.error;
+    return;
+  }
+
+  item.classList.add("filled");
+  stateEl.textContent = SLOT_ENABLED[slot] ? "已加载" : "已跳过";
+  stateEl.className = SLOT_ENABLED[slot] ? "bi-state ok" : "bi-state warn";
+  fileEl.textContent = f.name + "  (" + fmtBytes(f.bytes.length) + ")";
+}
+
+/** 渲染槽位 1 的详情 (用户程序信息) */
+function renderAppDetail() {
+  const f = SLOTS.app;
+  const box = $("appDetailBox");
+  const tbl = $("appDetail");
+  if (!f || f.error) { box.style.display = "none"; return; }
+
+  const info = f.info || {};
+  const rows = [
+    ["文件大小", fmtBytes(f.bytes.length)],
+    ["入口地址", hex32(info.entry_addr)],
+    ["段数量", String(info.segment_count)],
+    ["芯片 ID", String(info.chip_id)],
+  ];
+
+  if (f.isVarImage) {
+    // --- v6: 从 0x140000 开始的完整镜像 ---
+    const flashSize = flashSizeBytes();
+    const fits = FIXED_REGION_END + f.bytes.length <= flashSize;
+    rows.push(["镜像格式", '<span class="badge ok">完整镜像</span> ' +
+               '<span class="t-dim">(含分区表 B + 应用镜像)</span>']);
+    rows.push(["分区表 B", hex32(FIXED_REGION_END) + " (4KB)"]);
+    rows.push(["应用镜像", hex32(USER_APP_ADDR) +
+               " (" + fmtBytes(f.bytes.length - (USER_APP_ADDR - FIXED_REGION_END)) + ")"]);
+    rows.push(["烧录地址", hex32(FIXED_REGION_END) + " ~ " +
+               hex32(FIXED_REGION_END + f.bytes.length - 1)]);
+    rows.push(["占用", fits
+      ? '<span class="badge ok">' +
+        (f.bytes.length / (flashSize - FIXED_REGION_END) * 100).toFixed(1) + '%</span>'
+      : '<span class="badge err">超出 flash ' +
+        fmtBytes(FIXED_REGION_END + f.bytes.length - flashSize) + '</span>']);
+  } else {
+    // --- 兼容: 纯应用镜像 (旧格式) ---
+    const ua = resolveOtaSlotPart();
+    const fits = f.bytes.length <= ua.size;
+    rows.push(["镜像格式", '<span class="badge warn">纯应用镜像</span> ' +
+               '<span class="t-dim">(旧格式，建议打包)</span>']);
+    rows.push(["启动槽", "槽 " + ua.slot + " <code>" + ua.name + "</code>"]);
+    rows.push(["烧录地址", hex32(ua.offset) +
+               " <span class='t-dim'>(" + ua.source + ")</span>"]);
+    rows.push(["槽大小", fmtBytes(ua.size)]);
+    rows.push(["占用", fits
+      ? '<span class="badge ok">' + (f.bytes.length / ua.size * 100).toFixed(1) + '%</span>'
+      : '<span class="badge err">超出 ' + fmtBytes(f.bytes.length - ua.size) + '</span>']);
+  }
+
+  tbl.innerHTML = rows.map(([k, v]) => "<tr><td>" + k + "</td><td>" + v + "</td></tr>").join("");
+  box.style.display = "";
+}
+
+/** 渲染槽位 0 的详情 (IAP 烧录文件信息) */
+function renderBootDetail() {
+  const f = SLOTS.boot;
+  const box = $("bootDetailBox");
+  const tbl = $("bootDetail");
+  if (!f || f.error) { box.style.display = "none"; return; }
+
+  const info = f.info || {};
+  const rows = [
+    ["文件大小", fmtBytes(f.bytes.length)],
+    ["烧录地址", hex32(0) + " ~ " + hex32(f.bytes.length - 1)],
+    ["入口地址", hex32(info.entry_addr || 0)],
+    ["段数量", String(info.segment_count || 0)],
+    ["芯片 ID", String(info.chip_id || 0)],
+  ];
+  if (f.builtin) {
+    rows.push(["来源", "内置 IAP 镜像 (" + (f.chipKey || "?") +
+               ")，含 bootloader + 配置 + 表A + IAP"]);
+    rows.push(["✅ 可启动", "完整镜像，直接烧录即可启动，无需额外烧 IAP 程序"]);
+  }
+
+  // 实际烧录范围 (应用跳过选项后)
+  const r = sliceIapSide(f.bytes, f.cfgOffset);
+  if (r.segs.length === 0) {
+    rows.push(["烧录范围", '<span class="badge err">无内容</span> 所有区域都被跳过']);
+  } else if (r.skipped.length) {
+    rows.push(["烧录范围", "仅 " + r.segs.length + " 段 (" +
+               fmtBytes(r.segs.reduce((a, s) => a + s.data.length, 0)) + ")"]);
+    rows.push(["⏭ 跳过", r.skipped.join("<br>")]);
+  } else {
+    rows.push(["烧录范围", "全部区域 (" + r.segs.length + " 段)"]);
+  }
+
+  tbl.innerHTML = rows.map(([k, v]) => "<tr><td>" + k + "</td><td>" + v + "</td></tr>").join("");
+  box.style.display = "";
+}
+
+/**
+ * 更新区域跳过选项的警告提示
+ *
+ * 勾选「不烧 bootloader」等选项时提示风险。
+ */
+function updateBootSkipWarn() {
+  const el = $("bootSkipWarn");
+  if (!el) return;
+
+  const msgs = [];
+  if (SIDE_SKIP.bootloader) {
+    msgs.push("不烧 bootloader：设备必须已有可用的 IAP bootloader，否则无法启动。");
+  }
+  if (SIDE_SKIP.cfg) {
+    msgs.push("不烧配置区：保留设备上现有配置（含 WiFi/引脚/触发设置）。");
+  }
+  if (SIDE_SKIP.ptable) {
+    msgs.push("不烧分区表 A：保留设备上现有分区表，容量必须与设备 flash 匹配。");
+  }
+  if (SIDE_SKIP.iap) {
+    msgs.push("不烧 IAP 程序：保留设备上现有 IAP 程序（含 nvs）。");
+  }
+
+  if (msgs.length === 0) {
+    el.style.display = "none";
+    el.textContent = "";
+    return;
+  }
+  el.style.display = "";
+  el.innerHTML = "⚠️ " + msgs.join("<br>⚠️ ");
+}
+
+/** 刷新全部槽位 UI */
+function renderSlots() {
+  renderSlot("boot");
+  renderSlot("app");
+  renderBootDetail();
+  renderAppDetail();
+  // 区域跳过选项: 始终显示 (内置/手动模式都产出完整 iap_side.bin)
+  const skipBox = $("bootSkipBox");
+  if (skipBox) skipBox.style.display = "";
+  syncSkipCheckboxes();
+  updateBootSkipWarn();
+  if (typeof renderBootMode === "function") renderBootMode();
+  updateBurnSummary();
+}
+
+/* ==========================================================================
+ * 烧录摘要
+ * ========================================================================== */
+function updateBurnSummary() {
+  const order = [];
+  const skipped = [];
+  const missing = [];
+
+  const names = { boot: "IAP 烧录文件", app: "用户程序" };
+
+  for (const slot of SLOT_ORDER) {
+    const f = SLOTS[slot];
+    if (!f) { missing.push(names[slot]); continue; }
+    if (f.error) continue;
+    if (SLOT_ENABLED[slot]) {
+      // IAP 烧录文件: 标注跳过的区域
+      if (slot === "boot") {
+        const nSkip = Object.keys(SIDE_SKIP).filter(k => SIDE_SKIP[k]).length;
+        order.push(nSkip ? names[slot] + " (跳过 " + nSkip + " 区)" : names[slot]);
+      } else {
+        order.push(names[slot]);
+      }
+    } else {
+      skipped.push(names[slot]);
+    }
+  }
+
+  const hasError = SLOT_ORDER.some(k => SLOTS[k] && SLOTS[k].error);
+
+  $("burnTargetName").textContent = order.length
+    ? order.join("  →  ")
+    : "未选择文件";
+  $("burnTargetBar").classList.toggle("empty", order.length === 0);
+
+  let hint;
+  if (hasError) {
+    hint = "⚠️ 存在格式错误的文件，请重新选择。";
+  } else if (order.length === 0) {
+    hint = missing.length === SLOT_ORDER.length
+      ? "请至少选择一个文件。"
+      : "⚠️ 所有已加载的文件都被取消勾选，无法烧录。";
+  } else {
+    hint = "将按上述顺序烧录 " + order.length + " 项。";
+    if (skipped.length) hint += "  ⏭ 已跳过: " + skipped.join("、");
+    if (missing.length) hint += "  未选择: " + missing.join("、");
+    if (!FLASHER.connected) hint += "  ⚠️ 请先在上方「设备连接」中连接设备。";
+  }
+  $("burnTargetHint").textContent = hint;
+
+  // 按钮状态
+  const canBurn = order.length > 0 && !hasError;
+  $("btnFlash").disabled = !canBurn || !FLASHER.connected;
+  $("btnFlash").title = !FLASHER.connected
+    ? "请先连接设备"
+    : (canBurn ? "" : "请先加载文件");
+}
+
+/* ==========================================================================
+ * 文件选择
+ * ========================================================================== */
+
+/** 打开文件选择框 (指定槽位) */
+function pickFileFor(slot) {
+  pickTarget = slot;
+  const input = $("fileInput");
+  input.value = "";
+  input.click();
+}
+
+/** 处理选中的文件 */
+function onFilePicked(file) {
+  const slot = pickTarget;
+  if (!slot) return;
+
+  // --- CSV 分区表: 单独处理 (文本解析 + 约束校验) ---
+  if (/\.csv$/i.test(file.name)) {
+    handleCsvPicked(slot, file);
+    pickTarget = null;
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const bytes = new Uint8Array(e.target.result);
+    setSlotFile(slot, file.name, bytes);
+    pickTarget = null;
+  };
+  reader.onerror = () => {
+    showStatus("读取文件失败", "err");
+    pickTarget = null;
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+/**
+ * 处理 CSV 分区表文件
+ *
+ * 流程: 读文本 -> 解析 -> 校验 IAP 约束 -> 转为二进制 -> 导出
+ *
+ * CSV 用于生成分区表（供用户程序工程使用），不直接烧录。
+ */
+function handleCsvPicked(slot, file) {
+  showStatus(
+    "v5 方案下 CSV 分区表不再直接烧录。\n" +
+    "分区表 A 已包含在 iap_side.bin 中；\n" +
+    "分区表 B 由用户程序侧管理。",
+    "err"
+  );
+}
+
+/**
+ * 将文件放入指定槽位（严格校验格式）
+ */
+function setSlotFile(slot, name, bytes) {
+  const r = identifyFile(bytes);
+
+  if (!r.ok) {
+    SLOTS[slot] = { name, bytes, error: r.reason };
+    renderSlots();
+    showStatus("格式错误：" + name + "\n  " + r.reason, "err");
+    return;
+  }
+
+  // 槽位与类型匹配检查 (v5 两文件方案)
+  if (slot === "boot" && !["both", "boot", "iapSide"].includes(r.kind)) {
+    SLOTS[slot] = { name, bytes, error: "不是 IAP 烧录文件" };
+    renderSlots();
+    showStatus(
+      "「IAP 烧录文件」槽位只能放入 <code>iap_side.bin</code>" +
+      "（含 bootloader + 配置区 + 分区表 A + IAP 程序，0x0 起）。",
+      "err"
+    );
+    return;
+  }
+  if (slot === "app" && r.kind !== "app") {
+    SLOTS[slot] = { name, bytes, error: "不是用户程序" };
+    renderSlots();
+    showStatus(
+      "用户程序槽位只能放入<b>从 0x140000 开始的完整镜像</b> (user.bin)。<br>" +
+      "请用 <code>build_user_app.py</code> 或 <code>merge_user_app.py</code> " +
+      "打包（会合并分区表 B）。", "err");
+    return;
+  }
+
+  // 存入槽位
+  if (r.kind === "app") {
+    // v6: 记录是否为可变区完整镜像 (决定烧录地址)
+    SLOTS[slot] = { name, bytes, info: r.info,
+                    isVarImage: !!r.isVarImage,
+                    varBase: r.varBase, appOffset: r.appOffset };
+  } else {
+    // boot / iapSide / both
+    SLOTS[slot] = { name, bytes, info: r.info };
+  }
+
+  renderSlots();
+  showStatus("已加载 " + SLOT_DEFS[slot].title + "：" + name +
+             "\n  " + fmtBytes(bytes.length), "ok");
+}
+
+/** 清除槽位 */
+function clearSlot(slot) {
+  SLOTS[slot] = null;
+  renderSlots();
+}
+
+
+
+/* ==========================================================================
+ * 表单 <-> 配置对象
+ * ========================================================================== */
+
+/**
+ * 生成功能开关的 HTML
+ *
+ * @param {string} prefix 控件 id 前缀 ("de_" = 读回编辑)
+ */
+function flagsBoxHtml(prefix) {
+  return FLAGS.map(f => `
+    <div class="flag" title="${f.desc}">
+      <span class="fname">${f.name}</span>
+      <select data-bit="${f.bit}" id="${prefix}flag_${f.bit}">
+        <option value="0">关闭</option>
+        <option value="1">开启</option>
+      </select>
+      <span class="bit">bit${f.bit}</span>
+    </div>
+  `).join("");
+}
+
+/** 构建「读取配置区」编辑表单的功能开关 */
+function buildDeFlagsBox() {
+  const box = $("de_flagsBox");
+  if (!box) return;
+  box.innerHTML = flagsBoxHtml("de_");
+  box.querySelectorAll("select").forEach(sel => {
+    sel.addEventListener("change", updateDeFlagsField);
+  });
+  updateUsbFlagAvailability();
+}
+
+/**
+ * 从指定容器的 select 收集 flags 值
+ *
+ * @param {string} boxId 容器 id
+ */
+function readFlagsFromBoxId(boxId) {
+  const box = $(boxId);
+  if (!box) return 0;
+  let v = 0;
+  box.querySelectorAll("select").forEach(sel => {
+    if (sel.value === "1") v |= (1 << parseInt(sel.dataset.bit, 10));
+  });
+  return v >>> 0;
+}
+
+/** 收集「读取配置区」编辑表单标志位 */
+function readDeFlagsFromBox() {
+  return readFlagsFromBoxId("de_flagsBox");
+}
+
+/** 当前芯片是否支持 USB（未连接时返回 null 表示未知） */
+function chipSupportsUsb() {
+  const m = (FLASHER.chip || "").toLowerCase().match(/esp32[a-z0-9]*/);
+  if (!m) return null;
+  return USB_CHIPS.includes(m[0]);
+}
+
+/**
+ * 根据芯片能力启用/禁用 USB 相关标志位
+ *
+ * 未连接设备时不禁用（允许预先配置，设备侧 sanitize 会兜底）。
+ */
+function updateUsbFlagAvailability() {
+  const sup = chipSupportsUsb();
+  FLAGS.filter(f => f.usb).forEach(f => {
+    const sel = $("de_flag_" + f.bit);
+    if (!sel) return;
+    const box = sel.closest(".flag");
+    if (sup === false) {
+      sel.value = "0";
+      sel.disabled = true;
+      box.classList.add("disabled");
+      box.title = "该芯片 (" + (FLASHER.chip || "?") + ") 不支持 USB";
+    } else {
+      sel.disabled = false;
+      box.classList.remove("disabled");
+      box.title = f.desc;
+    }
+  });
+  updateDeFlagsField();
+}
+
+/** flags 值 -> 已开启项名称列表 */
+function flagsDescText(v) {
+  const active = FLAGS.filter(f => v & (1 << f.bit)).map(f => f.name);
+  return active.length ? "= " + active.join(", ") : "(无)";
+}
+
+/** 刷新「读取配置区」表单的 flags 显示 */
+function updateDeFlagsField() {
+  const v = readDeFlagsFromBox();
+  const box = $("de_flagsBox");
+  if (box) {
+    box.querySelectorAll("select").forEach(sel => {
+      sel.closest(".flag").classList.toggle("on", sel.value === "1");
+    });
+  }
+  const hex = $("de_flags");
+  if (hex) hex.value = hex32(v);
+  const desc = $("de_flags_desc");
+  if (desc) desc.textContent = flagsDescText(v);
+}
+
+/** 设置「读取配置区」表单的 flags */
+function setDeFlags(v) {
+  v = v >>> 0;
+  const box = $("de_flagsBox");
+  if (!box) return;
+  box.querySelectorAll("select").forEach(sel => {
+    const on = !!(v & (1 << parseInt(sel.dataset.bit, 10)));
+    sel.value = on ? "1" : "0";
+  });
+  updateDeFlagsField();
+}
+
+/* ==========================================================================
+ * 事件绑定
+ * ========================================================================== */
+function init() {
+  // 全局拖放: 拖入文件时自动放入对应槽位
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length) {
+      const file = e.dataTransfer.files[0];
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const bytes = new Uint8Array(ev.target.result);
+        const r = identifyFile(bytes);
+        if (!r.ok) {
+          showStatus("格式错误：" + file.name + "\n  " + r.reason, "err");
+          return;
+        }
+        const slot = r.kind === "ptable" ? "ptable" : (r.kind === "app" ? "app" : "iap");
+        setSlotFile(slot, file.name, bytes);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  });
+
+  // 烧录模块初始化
+  initFlasher();
+
+  // 读取/导出模块初始化
+  initDumper();
+
+  // 用户程序烧录模块初始化
+  initAppFlasher();
+
+  // 初始化烧录槽位显示
+  renderSlots();
+
+  // 初始化「读取配置区」的 OTA 槽位列表
+  renderDumpOtaSlotTable();
+
+  // 初始状态: 未连接设备，禁用所有需要连接的按钮
+  setFlashButtons(false);
+  setDumpButtons(false);
+}
+
+/* ==========================================================================
+ * Web Serial 烧录 (基于 esptool-js)
+ * ========================================================================== */
+
+const FLASHER = {
+  transport: null,
+  loader: null,
+  port: null,
+  connected: false,
+  chip: null,
+  /** 探测到的 flash 容量（字节），0 = 未探测到 */
+  detectedFlashBytes: 0,
+};
+
+/** 终端输出 */
+function termWrite(msg, cls = "") {
+  const t = $("term");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = msg + "\n";
+  t.appendChild(span);
+  t.scrollTop = t.scrollHeight;
+}
+
+function termClear() {
+  $("term").innerHTML = "";
+}
+
+/** esptool-js 需要的终端接口 */
+const termInterface = {
+  clean: () => termClear(),
+  writeLine: (data) => termWrite(data),
+  write: (data) => termWrite(data),
+};
+
+function setProgress(pct, text) {
+  $("progBox").style.display = "";
+  $("progBar").style.width = Math.max(0, Math.min(100, pct)) + "%";
+  $("progText").textContent = text || "";
+}
+
+function hideProgress() {
+  $("progBox").style.display = "none";
+  $("progText").textContent = "";
+}
+
+function initFlasher() {
+  // 环境检查
+  if (!("serial" in navigator)) {
+    $("serialUnsupported").classList.remove("hidden");
+    $("flashUI").classList.add("hidden");
+    return;
+  }
+  if (!window.isSecureContext) {
+    $("serialInsecure").classList.remove("hidden");
+    $("flashUI").classList.add("hidden");
+    return;
+  }
+
+  $("btnConnect").disabled = true;
+  $("btnConnect").textContent = "连接设备";
+  termWrite("正在加载 esptool-js...", "t-dim");
+
+  // 异步加载 esptool-js（ES module）
+  loadEsptool().then((res) => {
+    if (!res.ok) {
+      termWrite("无法加载 esptool-js（请检查网络或使用离线版）", "t-err");
+      $("btnConnect").textContent = "连接设备（不可用）";
+      return;
+    }
+    termWrite("esptool-js 已就绪", "t-ok");
+    termWrite("来源: " + res.url, "t-dim");
+    $("btnConnect").disabled = false;
+
+    $("btnConnect").addEventListener("click", connectDevice);
+    $("btnFlash").addEventListener("click", doBurn);
+    $("btnDisconnect").addEventListener("click", disconnectDevice);
+
+    // ===== 烧录槽位事件 =====
+    // 选择文件按钮
+    document.querySelectorAll(".bi-btn[data-pick]").forEach(btn => {
+      btn.addEventListener("click", () => pickFileFor(btn.dataset.pick));
+    });
+    // bootloader 模式切换
+    document.querySelectorAll('input[name="bootMode"]').forEach(rb => {
+      rb.addEventListener("change", () => {
+        if (rb.checked) applyBootMode(rb.value).catch(e =>
+          showStatus("载入内置镜像失败: " + e.message, "err"));
+      });
+    });
+    // bootloader 芯片类型手动选择
+    $("bootChipSelect").addEventListener("change", (e) => {
+      setBootChip(e.target.value).catch(err =>
+        showStatus("载入内置镜像失败: " + err.message, "err"));
+    });
+    $("btnBootExport").addEventListener("click", () => {
+      exportBuiltinBootloader().catch(e =>
+        showStatus("导出失败: " + (e && e.message ? e.message : e), "err"));
+    });
+    // 区域跳过选项
+    Object.keys(SIDE_SKIP_CHK).forEach(key => {
+      const chk = $(SIDE_SKIP_CHK[key]);
+      if (!chk) return;
+      chk.addEventListener("change", () => {
+        SIDE_SKIP[key] = chk.checked;
+        updateBootSkipWarn();
+        renderBootDetail();
+        updateBurnSummary();
+      });
+    });
+    // 清除按钮
+    document.querySelectorAll(".bi-btn[data-clear]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const slot = btn.dataset.clear;
+        // 清除 bootloader 后回到内置模式 (若可用)
+        if (slot === "boot" && bootMode === "builtin") {
+          SLOTS.boot = null;
+          applyBootMode("builtin", { silent: true })
+            .then(ok => { if (!ok) renderSlots(); })
+            .catch(() => renderSlots());
+          showStatus("已清除 bootloader 槽位", "info");
+          return;
+        }
+        clearSlot(slot);
+      });
+    });
+    // 槽位勾选框
+    SLOT_ORDER.forEach(slot => {
+      const chk = $(SLOT_CHK_ID[slot]);
+      if (chk) {
+        chk.addEventListener("change", () => {
+          SLOT_ENABLED[slot] = chk.checked;
+          renderSlot(slot);
+          updateBurnSummary();
+        });
+      }
+    });
+    // 隐藏的文件输入
+    $("fileInput").addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) onFilePicked(e.target.files[0]);
+    });
+  });
+}
+
+/** 连接设备 */
+async function connectDevice() {
+  $("btnConnect").disabled = true;
+  termClear();
+  termWrite("正在请求串口访问权限...", "t-info");
+
+  try {
+    // ESP32 系列常见的 USB-Serial/JTAG 与 USB-UART 桥接芯片
+    const filters = [
+      { usbVendorId: 0x303A },   // Espressif (USB-Serial/JTAG)
+      { usbVendorId: 0x10C4 },   // Silicon Labs CP210x
+      { usbVendorId: 0x1A86 },   // QinHeng CH34x / CH9102
+      { usbVendorId: 0x0403 },   // FTDI
+    ];
+    let port;
+    try {
+      port = await navigator.serial.requestPort({ filters });
+    } catch (e) {
+      // 用户取消或过滤后无匹配 —— 回退到不过滤
+      termWrite("未匹配到已知芯片，列出全部串口...", "t-warn");
+      port = await navigator.serial.requestPort();
+    }
+
+    FLASHER.port = port;
+    termWrite("串口已授权，正在连接...", "t-info");
+
+    FLASHER.transport = new ESPTOOL.Transport(port, true);
+    FLASHER.loader = new ESPTOOL.ESPLoader({
+      transport: FLASHER.transport,
+      baudrate: 115200,
+      terminal: termInterface,
+      debugLogging: false,
+    });
+
+    const chip = await FLASHER.loader.main();
+    FLASHER.chip = chip;
+    FLASHER.connected = true;
+
+    /*
+     * 读取设备信息。
+     *
+     * ⚠️ 这些读取**全部包在 try/catch 内** —— 它们依赖 flash 通信，
+     *    若 flash 通信异常 (如 "Flash ID: 0")，readMac() 等可能抛异常。
+     *    不能因此中断连接流程 —— 芯片已识别，仍应允许后续操作。
+     */
+    let mac = "-", flashSize = "-", crystal = "-";
+
+    try {
+      mac = await FLASHER.loader.chip.readMac(FLASHER.loader);
+    } catch (e) {
+      termWrite("读取 MAC 失败: " + (e && e.message ? e.message : e), "t-warn");
+    }
+
+    try {
+      const b = await detectDeviceFlashBytes();
+      if (b) {
+        FLASHER.detectedFlashBytes = b;
+        flashSize = fmtBytes(b).replace(/\s+/g, "");
+      } else {
+        FLASHER.detectedFlashBytes = 0;
+        flashSize = "未知";
+      }
+    } catch (e) {
+      FLASHER.detectedFlashBytes = 0;
+      flashSize = "未知";
+      termWrite("探测 flash 容量失败: " + (e && e.message ? e.message : e), "t-warn");
+    }
+
+    try { crystal = FLASHER.loader.chip.CRYSTAL_FREQ + " MHz"; } catch (_) {}
+
+    $("devChip").textContent = chip;
+    $("devMac").textContent = mac;
+    $("devFlash").textContent = flashSize;
+    $("devCrystal").textContent = crystal;
+    $("devInfoBox").style.display = "";
+
+    $("btnFlash").disabled = false;
+    $("btnDisconnect").disabled = false;
+  
+    termWrite("已连接: " + chip, "t-ok");
+
+    /*
+     * 同步启用各按钮。
+     *
+     * 每个调用独立 try/catch —— 任一 UI 刷新出错都不应中断连接流程
+     * (否则会出现"已连接"但后续按钮未启用的半死状态)。
+     */
+    const uiCalls = [
+      ["updateBurnSummary", updateBurnSummary],
+      ["setFlashButtons",   setFlashButtons],
+      ["setDumpButtons",    setDumpButtons],
+      ["updateDumpScopeUI", updateDumpScopeUI],
+    ];
+    for (const [name, fn] of uiCalls) {
+      if (typeof fn !== "function") continue;
+      try {
+        // 这些 UI 刷新函数都接受 enabled 参数: 连接后传 true
+        fn(true);
+      } catch (e) {
+        termWrite("UI 刷新 " + name + " 失败: " +
+                  (e && e.message ? e.message : e), "t-warn");
+      }
+    }
+
+    // 内置 IAP 镜像: 按检测到的芯片自动载入 (手动指定则优先)
+    if (typeof applyBootMode === "function") {
+      applyBootMode(bootMode, { silent: true })
+        .then(() => {
+          if (bootMode !== "builtin") return;
+          if (SLOTS.boot && SLOTS.boot.builtin) {
+            termWrite("已载入内置 IAP 镜像: " + SLOTS.boot.name +
+                      (bootChipOverride ? " (手动指定)" : " (自动识别)"), "t-ok");
+          } else {
+            termWrite("该芯片无内置 IAP 镜像，请在「芯片类型」中手动指定，或切换到「手动选择文件」", "t-warn");
+          }
+        })
+        .catch(e => termWrite("载入内置镜像失败: " +
+                              (e && e.message ? e.message : e), "t-warn"));
+    }
+    if (typeof appTermWrite === "function") {
+      appTermWrite("已连接: " + chip + " (" + mac + ")", "t-ok");
+      appTermWrite("可烧录用户程序（走 IAP 协议）", "t-dim");
+    }
+    if (typeof dumpTermWrite === "function") {
+      dumpTermWrite("已连接: " + chip + " (" + mac + ")", "t-ok");
+      dumpTermWrite("可读取 Flash 并导出 bin", "t-dim");
+    }
+
+    /*
+     * 读取设备上的分区表 B (0x140000) —— 用户程序的 OTA 槽布局由它决定。
+     *
+     * 分区表 B 属于用户程序工程，本工具不生成；这里读回来用于:
+     *   - 显示各 OTA 槽的名称/地址/大小
+     *   - 校验配置区的启动槽是否越界
+     * 失败不阻断连接 (设备可能尚未烧录用户程序)。
+     */
+    try {
+      await refreshDevicePtableB();
+      renderSlots();
+    } catch (e) {
+      termWrite("读取分区表 B 失败: " + (e && e.message ? e.message : e), "t-warn");
+    }
+
+    // 切换到用户选择的波特率
+    const wantBaud = parseInt($("flashBaud").value, 10);
+    if (wantBaud !== 115200) {
+      termWrite("切换到 " + wantBaud + " 波特率...", "t-info");
+      try {
+        await FLASHER.loader.changeBaud(wantBaud);
+        termWrite("波特率已切换: " + wantBaud, "t-ok");
+      } catch (e) {
+        termWrite("波特率切换失败，继续使用 115200: " + e.message, "t-warn");
+      }
+    }
+  } catch (err) {
+    termWrite("连接失败: " + (err.message || err), "t-err");
+    $("btnConnect").disabled = false;
+
+    /*
+     * ⚠️ chip 已识别后发生的异常**不应**断开设备。
+     *
+     * FLASHER.connected 一旦为 true，说明 loader.main() 已成功，
+     * 后续 (读 MAC / 探测 flash / 切波特率) 的失败只是"信息不全"，
+     * 不应让设备回到未连接状态 —— 否则会出现
+     * "终端显示已连接，但所有按钮都是灰的" 的半死状态。
+     */
+    if (!FLASHER.connected) {
+      await cleanupFlasher();
+    } else {
+      // 已连接: 仅刷新一次按钮状态，保证可用
+      try { setFlashButtons(true); } catch (_) {}
+      try { setDumpButtons(true); } catch (_) {}
+      termWrite("设备已连接（部分信息读取失败，不影响烧录/读取）", "t-warn");
+    }
+  } finally {
+    // 无论成功失败，恢复"连接"按钮可点 (已连接时按钮文字会由 UI 更新)
+    if (!FLASHER.connected) {
+      $("btnConnect").disabled = false;
+    }
+  }
+}
+
+async function cleanupFlasher() {
+  try {
+    if (FLASHER.transport) await FLASHER.transport.disconnect();
+  } catch (_) {}
+  FLASHER.transport = null;
+  FLASHER.loader = null;
+  FLASHER.port = null;
+  FLASHER.connected = false;
+  FLASHER.chip = null;
+  FLASHER.detectedFlashBytes = 0;
+  clearDevicePtableB();
+  $("btnFlash").disabled = true;
+  $("btnDisconnect").disabled = true;
+  $("devInfoBox").style.display = "none";
+  hideProgress();
+
+  // 断开后: 若为自动模式则清空内置 IAP 镜像 (芯片未知);
+  //         若用户手动指定了芯片类型, 则保留 (可离线准备烧录)
+  if (typeof bootMode !== "undefined" && bootMode === "builtin" &&
+      SLOTS.boot && SLOTS.boot.builtin && !bootChipOverride) {
+    SLOTS.boot = null;
+    if (typeof renderSlots === "function") renderSlots();
+  }
+  if (typeof renderBootMode === "function") renderBootMode();
+
+  // 同步禁用用户程序烧录按钮
+  if (typeof setFlashButtons === "function") setFlashButtons(false);
+  if (typeof setDumpButtons === "function") setDumpButtons(false);
+}
+
+async function disconnectDevice() {
+  termWrite("正在断开...", "t-info");
+  await cleanupFlasher();
+  $("btnConnect").disabled = false;
+  termWrite("已断开", "t-dim");
+}
+
+/**
+ * 构造烧录段列表（v5 两文件方案）
+ *
+ * 烧录方案 (详见 docs/FINAL-REPORT.md §7):
+ *   1. iap_side.bin  0x000000  bootloader + iap_cfg + 分区表A + nvs + iap
+ *                              (0x0 ~ 0x13FFFF，固定区整片 1280KB)
+ *   2. user.bin      0x140000  用户程序 (从 0x140000 开始的完整镜像)
+ *
+ * 槽位映射:
+ *   boot → iap_side.bin  (IAP 烧录文件 @ 0x0 ~ 0x13FFFF)
+ *   app  → user.bin      (用户程序 @ 0x140000, 整段写入)
+ *
+ * @returns {{segs:Array, desc:string[]}}
+ */
+function buildBurnSegments() {
+  const segs = [];
+  const desc = [];
+
+  // --- 槽位 0: IAP 烧录文件 (0x0 起，按区域切片) ---
+  if (SLOT_ENABLED.boot && SLOTS.boot && !SLOTS.boot.error) {
+    const f = SLOTS.boot;
+    const base = f.segBase || 0;
+
+    if (base !== 0) {
+      throw new Error(
+        "「IAP 烧录文件」应从 0x0 开始 (iap_side.bin)，" +
+        "当前基址为 " + hex32(base) + "。"
+      );
+    }
+
+    const r = sliceIapSide(f.bytes, f.cfgOffset);
+    if (r.segs.length === 0) {
+      throw new Error(
+        "「IAP 烧录文件」所有区域都被勾选为「不烧录」，没有内容可写。"
+      );
+    }
+    for (const s of r.segs) segs.push(s);
+    desc.push("IAP 烧录文件 @ " + hex32(0) +
+              " (" + r.segs.length + " 段, " +
+              fmtBytes(r.segs.reduce((a, s) => a + s.data.length, 0)) + ")");
+    if (r.skipped.length) {
+      desc.push("  ⏭ 跳过区域: " + r.skipped.join("、"));
+    }
+  }
+
+  // --- 槽位 1: 用户程序 (v6: 整段写入 0x140000) ---
+  if (SLOT_ENABLED.app && SLOTS.app && !SLOTS.app.error) {
+    const f = SLOTS.app;
+
+    if (f.isVarImage) {
+      /*
+       * v6: 从 0x140000 开始的完整镜像 (分区表 B + 应用镜像)。
+       *     直接整段写入 0x140000，与 esptool 语义一致。
+       */
+      const flashSize = flashSizeBytes();
+      if (FIXED_REGION_END + f.bytes.length > flashSize) {
+        throw new Error(
+          "用户程序 (" + fmtBytes(f.bytes.length) + ") 超出 flash 容量 (" +
+          fmtBytes(flashSize) + ")。\n" +
+          "文件应从 " + hex32(FIXED_REGION_END) + " 开始，到 " +
+          hex32(FIXED_REGION_END + f.bytes.length - 1) + " 结束。"
+        );
+      }
+      segs.push({ data: f.bytes, address: FIXED_REGION_END });
+      desc.push("用户程序 (完整镜像) @ " + hex32(FIXED_REGION_END) +
+                " (" + fmtBytes(f.bytes.length) + ", 含分区表 B + 应用镜像)");
+    } else {
+      /*
+       * 兼容: 纯应用镜像 (旧格式) → 写到启动槽地址 (从分区表 B 读回)。
+       */
+      const ua = resolveOtaSlotPart();
+
+      if (ua.offset < FIXED_REGION_END) {
+        throw new Error(
+          "用户程序目标地址 " + hex32(ua.offset) + " 落在 IAP 固定区内 " +
+          "(< " + hex32(FIXED_REGION_END) + ")，会覆盖 IAP 侧。\n" +
+          "请先连接设备读取分区表 B，或检查用户程序工程的分区表配置。"
+        );
+      }
+      if (f.bytes.length > ua.size) {
+        throw new Error(
+          "用户程序 (" + fmtBytes(f.bytes.length) + ") 超出槽 " +
+          ua.slot + " 分区大小 (" + fmtBytes(ua.size) + ")。\n" +
+          "分区表 B 的 " + ua.name + " 分区: " + hex32(ua.offset) + " ~ " +
+          hex32(ua.offset + ua.size - 1) + "\n" +
+          "请缩小程序、减少槽数或调整分区表。"
+        );
+      }
+      segs.push({ data: f.bytes, address: ua.offset });
+      desc.push("用户程序 (纯镜像, 兼容模式) → 槽 " + ua.slot + " @ " +
+                hex32(ua.offset) + " (" + fmtBytes(f.bytes.length) + ")");
+      desc.push("  ⚠️ 建议用 build_user_app.py 打包为从 " +
+                hex32(FIXED_REGION_END) + " 开始的完整镜像");
+    }
+  }
+
+  // --- 重叠检查: 任何两段地址区间不得相交 ---
+  //
+  // 防止 IAP 侧与用户程序互相覆盖 (例如用户程序被误烧到固定区内)。
+  const sorted = segs.slice().sort((a, b) => a.address - b.address);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1], cur = sorted[i];
+    const prevEnd = prev.address + prev.data.length;   // 不含上界
+    if (cur.address < prevEnd) {
+      throw new Error(
+        "烧录地址重叠，会导致互相覆盖：\n" +
+        "  段 " + hex32(prev.address) + " ~ " + hex32(prevEnd - 1) + "\n" +
+        "  段 " + hex32(cur.address) + " ~ " +
+        hex32(cur.address + cur.data.length - 1) + "\n" +
+        "重叠区: " + hex32(cur.address) + " ~ " + hex32(prevEnd - 1)
+      );
+    }
+  }
+
+  return { segs, desc };
+}
+
+/** 统一烧录入口 */
+async function doBurn() {
+  if (!FLASHER.connected) {
+    showStatus("请先连接设备", "err");
+    return;
+  }
+
+  let segs, desc;
+  try {
+    const r = buildBurnSegments();
+    segs = r.segs;
+    desc = r.desc;
+    if (segs.length === 0) throw new Error("请至少选择一个文件");
+  } catch (err) {
+    showStatus(err.message, "err");
+    return;
+  }
+
+  const totalBytes = segs.reduce((s, f) => s + f.data.length, 0);
+
+  if (!confirm(
+    "即将烧录到设备（按顺序）：\n\n" +
+    "  芯片: " + (FLASHER.chip || "?") + "\n" +
+    desc.map((d, i) => "  " + (i + 1) + ". " + d).join("\n") + "\n\n" +
+    "  合计: " + totalBytes.toLocaleString() + " 字节\n\n" +
+    "烧录期间请勿断开 USB。确认继续？"
+  )) {
+    termWrite("已取消烧录", "t-warn");
+    return;
+  }
+
+  setFlashButtons(false);
+  termWrite("", "");
+  termWrite("=== 开始烧录 ===", "t-info");
+  desc.forEach((d, i) => termWrite("  " + (i + 1) + ". " + d, "t-dim"));
+
+  try {
+    await FLASHER.loader.writeFlash({
+      fileArray: segs,
+      flashMode: "dio",
+      flashFreq: "80m",
+      flashSize: flashSizeForEsptool(),
+      eraseAll: false,
+      compress: true,
+      reportProgress: (fileIndex, written, total) => {
+        const pct = total > 0 ? (written / total) * 100 : 0;
+        setProgress(pct, "写入 " + written.toLocaleString() + " / " +
+                    total.toLocaleString() + " 字节 (" + pct.toFixed(1) + "%)");
+      },
+    });
+
+    setProgress(100, "写入完成，正在复位设备...");
+    termWrite("烧录完成，复位设备", "t-ok");
+    await FLASHER.loader.after("hard_reset");
+
+    showStatus(
+      "烧录成功！\n" +
+      desc.map((d, i) => "  " + (i + 1) + ". " + d).join("\n") + "\n" +
+      "  合计 " + totalBytes.toLocaleString() + " 字节\n" +
+      "  设备已复位",
+      "ok"
+    );
+    termWrite("=== 烧录成功 ===", "t-ok");
+  } catch (err) {
+    termWrite("烧录失败: " + (err.message || err), "t-err");
+    showStatus("烧录失败: " + (err.message || err), "err");
+  } finally {
+    setTimeout(hideProgress, 1500);
+    setFlashButtons(true);
+  }
+}
+
+/** 擦除配置区（恢复出厂默认） */
+async function eraseCfgRegion() {
+  if (!FLASHER.connected) {
+    showStatus("请先连接设备", "err");
+    return;
+  }
+  if (!confirm(
+    "即将擦除配置区 (0x10000, 8KB)。\n\n" +
+    "设备下次启动将使用内置默认值重新写入配置。\n" +
+    "确认继续？"
+  )) return;
+
+  $("btnFlash").disabled = true;
+  termWrite("正在擦除配置区 0x10000 (8192 字节)...", "t-info");
+
+  try {
+    // 注意: esptool-js 0.6.1 没有 eraseRegion()，用写入 0xFF 实现擦除
+    const blank = new Uint8Array(8192).fill(0xFF);
+    await FLASHER.loader.writeFlash({
+      fileArray: [{ data: blank, address: 0x10000 }],
+      flashMode: "dio", flashFreq: "80m",
+      flashSize: flashSizeForEsptool(),
+      eraseAll: false, compress: true,
+      reportProgress: (i, w, t) => setProgress(t ? w / t * 100 : 0, "擦除中..."),
+    });
+    termWrite("配置区已清零", "t-ok");
+    showStatus("配置区已擦除，设备下次启动将使用默认配置", "ok");
+  } catch (err) {
+    termWrite("擦除失败: " + (err.message || err), "t-err");
+    showStatus("擦除失败: " + (err.message || err), "err");
+  } finally {
+    setTimeout(hideProgress, 1200);
+    $("btnFlash").disabled = false;
+    }
+}
+
+/* ==========================================================================
+ * 读取设备 Flash / 导出 bin
+ * ========================================================================== */
+
+const DUMP = {
+  busy: false,
+};
+
+/** 各读取范围的定义 (v6 地址) */
+const DUMP_SCOPES = {
+  iap:   { addr: 0x010000, size: 0x130000, name: "IAP 程序区" },
+  cfg:   { addr: 0x008000, size: 0x2000,   name: "配置区" },
+  app:   { addr: 0x150000, size: 0x2B0000, name: "用户程序区" },
+  var:   { addr: 0x140000, size: 0x2C0000, name: "可变区 (含分区表 B)" },
+};
+
+function dumpTermWrite(msg, cls = "") {
+  const t = $("dumpTerm");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = msg + "\n";
+  t.appendChild(span);
+  t.scrollTop = t.scrollHeight;
+}
+function dumpTermClear() { $("dumpTerm").innerHTML = ""; }
+
+function dumpSetProgress(pct, text) {
+  $("dumpProgBox").style.display = "";
+  $("dumpProgBar").style.width = Math.max(0, Math.min(100, pct)) + "%";
+  $("dumpProgText").textContent = text || "";
+}
+function dumpHideProgress() {
+  $("dumpProgBox").style.display = "none";
+  $("dumpProgText").textContent = "";
+}
+
+function initDumper() {
+  $("dumpScope").addEventListener("change", updateDumpScopeUI);
+  updateDumpScopeUI();
+
+  // 功能开关 (读回编辑表单)
+  buildDeFlagsBox();
+
+  $("btnDump").addEventListener("click", () => doDump(false));
+  $("btnDumpEdit").addEventListener("click", dumpCfgForEdit);
+
+  // 编辑表单按钮
+  $("btnDumpWrite").addEventListener("click", dumpWriteBack);
+  $("btnDumpReload").addEventListener("click", dumpCfgForEdit);
+  $("btnDumpExport").addEventListener("click", dumpExportEdited);
+  $("btnDumpCancel").addEventListener("click", () => {
+    DUMPEDIT.raw = null;
+    DUMPEDIT.cfg = null;
+    $("dumpEditBox").style.display = "none";
+    showStatus("已取消编辑", "info");
+  });
+
+  // 多 OTA 槽: 手动增删 (只改配置区里的 ota_slot_count)
+  $("btnDeSlotAdd").addEventListener("click", () => {
+    const el = $("de_otaslots");
+    const n = Math.min((parseInt(el.value, 10) || 1) + 1, OTA_SLOT_MAX);
+    el.value = String(n);
+    renderDumpOtaSlotTable();
+  });
+  $("btnDeSlotDel").addEventListener("click", () => {
+    const el = $("de_otaslots");
+    const n = Math.max((parseInt(el.value, 10) || 1) - 1, 1);
+    el.value = String(n);
+    renderDumpOtaSlotTable();
+  });
+}
+
+function updateDumpScopeUI() {
+  const s = $("dumpScope").value;
+
+  if (s === "custom") {
+    $("dumpCustomRow").style.display = "";
+    $("dumpScopeHint").textContent = "手动指定地址与长度";
+  } else if (s === "full") {
+    $("dumpCustomRow").style.display = "none";
+    const sz = flashSizeBytes();
+    $("dumpScopeHint").textContent =
+      "整片读取 " + (sz / 1024 / 1024).toFixed(0) + "MB（需设备已连接才能确定大小）";
+  } else {
+    $("dumpCustomRow").style.display = "none";
+    const d = DUMP_SCOPES[s];
+    $("dumpScopeHint").textContent =
+      d.name + " " + hex32(d.addr) + " ~ " + hex32(d.addr + d.size) +
+      " (" + (d.size / 1024).toFixed(0) + " KB)";
+  }
+}
+
+/**
+ * JEDEC ID 的容量编码 -> 容量字符串
+ *
+ * 与 esptool-js 内部的 DETECTED_FLASH_SIZES 表一致。
+ * 键 = JEDEC ID 的第 3 字节 (容量编码)。
+ */
+const FLASH_SIZE_BY_ID = {
+  0x12: "256KB", 0x13: "512KB", 0x14: "1MB",   0x15: "2MB",
+  0x16: "4MB",   0x17: "8MB",   0x18: "16MB",  0x19: "32MB",
+  0x1a: "64MB",  0x1b: "128MB", 0x1c: "256MB",
+  0x20: "64MB",  0x21: "128MB", 0x22: "256MB",
+  0x32: "256KB", 0x33: "512KB", 0x34: "1MB",   0x35: "2MB",
+  0x36: "4MB",   0x37: "8MB",   0x38: "16MB",  0x39: "32MB",
+  0x3a: "64MB",
+};
+
+/**
+ * 探测设备 flash 容量（字节）。
+ *
+ * 【为什么不用 loader.detectFlashSize()】
+ *
+ * esptool-js 0.6.1 的 detectFlashSize() 在**读不到 JEDEC ID 时会
+ * 静默回退到 "4MB" 并返回该字符串**，调用方无法区分:
+ *   - 真的探测到 4MB
+ *   - 探测失败，回退到 4MB
+ *
+ * 因此这里**直接调用 readFlashId()**，自己判断返回值:
+ *   - 0xFFFFFF / 0x000000 -> 读不到，返回 null
+ *   - 容量编码不在表中      -> 未知容量，返回 null
+ *   - 正常                  -> 查表返回字节数
+ *
+ * @returns {Promise<number|null>} 字节数，或 null（探测失败）
+ */
+async function detectDeviceFlashBytes() {
+  const L = FLASHER.loader;
+  if (!L || typeof L.readFlashId !== "function") return null;
+
+  let flashId;
+  try {
+    flashId = await L.readFlashId();
+  } catch (e) {
+    termWrite("读取 flash JEDEC ID 失败: " + (e.message || e), "t-warn");
+    return null;
+  }
+
+  // 无符号化 (readFlashId 可能返回负数)
+  flashId = flashId >>> 0;
+
+  // 读不到 flash: 全 1 或全 0
+  if (flashId === 0xFFFFFF || flashId === 0x000000) {
+    termWrite("flash JEDEC ID 读取失败 (0x" + flashId.toString(16) +
+              ")，无法自动探测容量", "t-warn");
+    termWrite("  ⚠️ 这通常**不影响烧录**：将按默认 4MB 处理。", "t-dim");
+    termWrite("  若设备实际不是 4MB，请在「芯片类型」中手动指定，或检查:", "t-dim");
+    termWrite("    1) 设备正在运行的程序是否占用了 flash 引脚 (如自定义 SPI 屏)", "t-dim");
+    termWrite("    2) USB 线质量 / 波特率过高导致通信不稳 (可降回 115200 重试)", "t-dim");
+    termWrite("    3) flash 引脚虚焊 / 供电不足", "t-dim");
+    return null;
+  }
+
+  // JEDEC ID 第 3 字节 = 容量编码
+  const sizeId = (flashId >>> 16) & 0xFF;
+  const sizeStr = FLASH_SIZE_BY_ID[sizeId];
+
+  if (!sizeStr) {
+    termWrite("flash JEDEC ID = 0x" + flashId.toString(16) +
+              "，容量编码 0x" + sizeId.toString(16) +
+              " 不在已知表中，无法自动探测容量", "t-warn");
+    return null;
+  }
+
+  const bytes = parseFlashSize(sizeStr);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    termWrite("flash 容量解析失败: " + sizeStr, "t-warn");
+    return null;
+  }
+
+  termWrite("flash 容量探测: " + sizeStr +
+            " (JEDEC ID 0x" + flashId.toString(16) + ")", "t-dim");
+  return bytes;
+}
+
+/**
+ * 从设备信息推断 flash 大小（字节）
+ *
+ * 优先使用 detectDeviceFlashBytes() 探测出的可靠值 (FLASHER.detectedFlashBytes)，
+ * 因为 esptool-js 的 loader.flashSize 在探测失败时会**静默回退到 "4MB"**，
+ * 无法区分真假。探测失败时回退到默认值 (4MB)。
+ */
+function flashSizeBytes() {
+  // 1. 可靠探测值
+  if (FLASHER.detectedFlashBytes > 0) {
+    return FLASHER.detectedFlashBytes;
+  }
+  // 2. 兜底默认值 (4MB)
+  return 4 * 1024 * 1024;
+}
+
+/**
+ * 烧录时传给 esptool-js 的 flashSize 参数
+ *
+ * esptool-js 用它做镜像越界检查。用 "keep" 表示不修改镜像头，
+ * 同时避免传入错误的容量导致误判。
+ */
+function flashSizeForEsptool() {
+  return "keep";
+}
+
+/** 解析地址/长度输入（支持 0x 十六进制） */
+function parseNum(str, def) {
+  const s = String(str || "").trim();
+  if (!s) return def;
+  const v = /^0x/i.test(s) ? parseInt(s, 16) : parseInt(s, 10);
+  return isNaN(v) ? def : v;
+}
+
+/**
+ * 解析 UART 引脚输入
+ *
+ * 留空、"默认"、0xFF 均表示使用该端口的芯片默认引脚。
+ */
+function parsePinOr(str, def) {
+  const s = String(str || "").trim();
+  if (!s || s === "默认" || s.toLowerCase() === "default") return def;
+  const v = /^0x/i.test(s) ? parseInt(s, 16) : parseInt(s, 10);
+  if (isNaN(v)) return def;
+  return v === 0xFF ? def : v;
+}
+
+/** 引脚显示文本 */
+function pinText(v) {
+  return (v === UART_PIN_DEFAULT) ? "默认" : ("GPIO" + v);
+}
+
+/**
+ * 读取设备 flash 并导出为 bin
+ *
+ * 读取配置区（解析 + 编辑 + 写回）的功能见 dumpCfgForEdit()。
+ */
+async function doDump() {
+  if (DUMP.busy) return;
+  if (!FLASHER.connected) {
+    showStatus("请先在「烧录到设备」中连接设备", "err");
+    return;
+  }
+
+  // 确定读取范围
+  let addr, size, label;
+  {
+    const s = $("dumpScope").value;
+    if (s === "full") {
+      addr = 0;
+      size = flashSizeBytes();
+      label = "整片 Flash";
+    } else if (s === "custom") {
+      addr = parseNum($("dumpAddr").value, -1);
+      size = parseNum($("dumpSize").value, -1);
+      if (addr < 0 || size <= 0) {
+        showStatus("请填写有效的地址与长度（支持 0x 十六进制）", "err");
+        return;
+      }
+      label = "自定义范围";
+    } else {
+      const d = DUMP_SCOPES[s];
+      addr = d.addr;
+      size = d.size;
+      label = d.name;
+    }
+  }
+
+  // 对齐到 4KB
+  const alignedSize = Math.ceil(size / 4096) * 4096;
+
+  if (!confirm(
+    "即将从设备读取 Flash：\n\n" +
+    "  范围: " + label + "\n" +
+    "  地址: " + hex32(addr) + "\n" +
+    "  长度: " + alignedSize.toLocaleString() + " 字节 (" +
+      (alignedSize / 1024).toFixed(0) + " KB)\n" +
+    "  芯片: " + (FLASHER.chip || "?") + "\n\n" +
+    "读取期间请勿断电。确认继续？"
+  )) return;
+
+  DUMP.busy = true;
+  setDumpButtons(false);
+  dumpTermClear();
+  dumpHideProgress();
+  $("dumpResultBox").style.display = "none";
+
+  try {
+    const { data, elapsed } = await readFlashWithProgress(addr, alignedSize, label);
+
+    // 统计非 0xFF 字节（判断是否为空区域）
+    let nonFF = 0;
+    for (let i = 0; i < data.length; i++) if (data[i] !== 0xFF) nonFF++;
+
+    const rows = [
+      ["范围", label],
+      ["地址", hex32(addr) + " ~ " + hex32(addr + data.length)],
+      ["长度", data.length.toLocaleString() + " 字节 (" + (data.length / 1024).toFixed(1) + " KB)"],
+      ["CRC32", hex32(crc32(data))],
+      ["非 0xFF 字节", nonFF.toLocaleString() + " (" + (nonFF / data.length * 100).toFixed(1) + "%)"],
+      ["耗时", elapsed + " 秒"],
+    ];
+
+    // 若读的是配置区，尝试解析
+    if (addr === DUMP_SCOPES.cfg.addr && data.length >= CFG_PART_SIZE) {
+      const s0 = parseSlot(data, 0);
+      const s1 = parseSlot(data, SLOT_SIZE);
+      rows.push(["槽 0", s0.valid ? '<span class="badge ok">有效</span> seq=' + s0.seq
+                                   : '<span class="badge err">无效</span> ' + s0.reason]);
+      rows.push(["槽 1", s1.valid ? '<span class="badge ok">有效</span> seq=' + s1.seq
+                                   : '<span class="badge err">无效</span> ' + s1.reason]);
+
+      let best = null;
+      for (const s of [s0, s1]) if (s.valid && (!best || s.seq > best.seq)) best = s;
+      if (best) {
+        const c = decodeData(best.data);
+        rows.push(["SSID", c.wifi_ssid]);
+        rows.push(["AP IP", c.wifi_ip + " / " + c.wifi_netmask]);
+        rows.push(["flags", hex32(c.flags)]);
+        rows.push(["等待秒数", String(c.wait_seconds)]);
+      }
+    }
+
+    $("dumpResult").innerHTML = rows
+      .map(([k, v]) => "<tr><td>" + k + "</td><td>" + v + "</td></tr>").join("");
+    $("dumpResultBox").style.display = "";
+
+    // 生成文件名并导出
+    const fname = dumpFileName(label, addr);
+    downloadBytes(data, fname);
+    dumpTermWrite("已导出: " + fname, "t-ok");
+    showStatus(
+      "读取完成并已导出 " + fname + "\n" +
+      "  " + data.length.toLocaleString() + " 字节, CRC32 " + hex32(crc32(data)) + "\n\n" +
+      "可直接用「选择文件」加载该 bin 查看/编辑。",
+      "ok"
+    );
+  } catch (err) {
+    dumpTermWrite("读取失败: " + (err.message || err), "t-err");
+    showStatus("读取失败: " + (err.message || err), "err");
+  } finally {
+    DUMP.busy = false;
+    setDumpButtons(true);
+    setTimeout(dumpHideProgress, 1500);
+  }
+}
+
+/** 根据范围生成导出文件名 */
+function dumpFileName(label, addr) {
+  const chip = (FLASHER.chip || "esp32").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const mac = ($("devMac").textContent || "").replace(/:/g, "").slice(-6);
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const tag = label.replace(/[^\w\u4e00-\u9fa5]/g, "");
+  return "dump_" + chip + "_" + hex32(addr).slice(2) + "_" + tag +
+         (mac ? "_" + mac : "") + "_" + ts + ".bin";
+}
+
+/** 通用字节下载 */
+function downloadBytes(bytes, filename) {
+  const blob = new Blob([bytes], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function setDumpButtons(enabled) {
+  const conn = FLASHER.connected;
+  $("btnDump").disabled = !enabled || !conn;
+  $("btnDumpEdit").disabled = !enabled || !conn;
+}
+
+/* ==========================================================================
+ * 读取配置区 → 编辑 → 写回设备
+ * ========================================================================== */
+
+const DUMPEDIT = {
+  raw: null,        // 读回的 8KB 配置区原始字节
+  cfg: null,        // 解析出的配置对象
+  busy: false,
+};
+
+/** 把配置对象填入编辑表单 */
+function fillDumpEditForm(cfg) {
+  $("de_wait").value = cfg.wait_seconds;
+  $("de_ssid").value = cfg.wifi_ssid;
+  $("de_password").value = cfg.wifi_password;
+  $("de_channel").value = cfg.wifi_channel;
+  $("de_ip").value = cfg.wifi_ip;
+  $("de_netmask").value = cfg.wifi_netmask;
+  $("de_scl").value = cfg.i2c_scl_gpio;
+  $("de_sda").value = cfg.i2c_sda_gpio;
+  $("de_i2caddr").value = hex8(cfg.i2c_addr);
+  $("de_uartport").value = String(cfg.uart_port);
+  $("de_uarttx").value = cfg.uart_tx_gpio === UART_PIN_DEFAULT ? "" : cfg.uart_tx_gpio;
+  $("de_uartrx").value = cfg.uart_rx_gpio === UART_PIN_DEFAULT ? "" : cfg.uart_rx_gpio;
+  $("de_baud").value = cfg.uart_baudrate;
+  $("de_trig").value = cfg.trig_gpio;
+  $("de_triglevel").value = String(cfg.trig_gpio_level);
+  $("de_bootparam").value = cfg.boot_param || "";
+
+  // 功能开关 (可编辑)
+  setDeFlags(cfg.flags);
+
+  // 多 OTA 槽
+  $("de_otaslots").value = String(cfg.ota_slot_count || 1);
+  $("de_activeslot").value = String(cfg.active_slot || 0);
+  $("de_otagpio").value = (cfg.ota_gpio === undefined ? 0xFF : cfg.ota_gpio);
+
+  // 槽加载地址/大小 (来自配置区 slot_addr[] / slot_size[])
+  DE_SLOT_ADDR = Array.isArray(cfg.slot_addr) ? cfg.slot_addr.slice() : [];
+  DE_SLOT_SIZE = Array.isArray(cfg.slot_size) ? cfg.slot_size.slice() : [];
+
+  renderDumpOtaSlotTable();
+}
+
+/** 从配置区读回的槽加载地址/大小 (编辑表单用) */
+let DE_SLOT_ADDR = [];
+let DE_SLOT_SIZE = [];
+
+/** 渲染「读取配置区」编辑表单的 OTA 槽位列表
+ *
+ * ⚠️ 地址/大小直接来自**配置区** (slot_addr[] / slot_size[])，
+ *    由用户手动填写。IAP 不解析任何分区表。
+ *
+ *    slot_addr[i] == 0  →  该槽无效，不可启动
+ */
+function renderDumpOtaSlotTable() {
+  const tbl = $("de_otaslot_table");
+  if (!tbl) return;
+
+  const el = $("de_otaslots");
+  const count = Math.max(1, Math.min(parseInt(el && el.value, 10) || 1, OTA_SLOT_MAX));
+  const sel = $("de_activeslot");
+  let active = sel ? (parseInt(sel.value, 10) || 0) : 0;
+  if (active >= count) active = 0;   // 槽数减少时纠正越界的活动槽
+
+  const addrs = DE_SLOT_ADDR;
+  const sizes = DE_SLOT_SIZE;
+
+  let html = "<thead><tr>" +
+    "<th>槽</th><th>加载地址</th><th>大小</th><th class='sl-pick'>启动</th>" +
+    "</tr></thead><tbody>";
+
+  for (let i = 0; i < count; i++) {
+    const a = addrs[i] || 0;
+    const sz = sizes[i] || 0;
+    html += "<tr" + (i === active ? ' class="active"' : "") + ">" +
+      "<td class='sl-idx'>" + i + "</td>" +
+      "<td class='sl-addr'><input type='text' class='slot-addr' data-slot='" + i + "' " +
+        "value='" + (a ? hex32(a) : "") + "' placeholder='0x00000000（空=无效）'></td>" +
+      "<td class='sl-size'><input type='text' class='slot-size' data-slot='" + i + "' " +
+        "value='" + (sz ? hex32(sz) : "") + "' placeholder='0x00000000（自动）'></td>" +
+      "<td class='sl-pick'><input type='radio' name='deActiveSlotRadio' " +
+        "value='" + i + "'" + (i === active ? " checked" : "") + "></td>" +
+      "</tr>";
+  }
+  html += "</tbody>";
+  tbl.innerHTML = html;
+
+  tbl.querySelectorAll("input[name='deActiveSlotRadio']").forEach(r => {
+    r.addEventListener("change", () => {
+      const s = $("de_activeslot");
+      if (s) s.value = r.value;
+      renderDumpOtaSlotTable();
+    });
+  });
+
+  // 地址输入: 失焦时归一化显示并回写
+  tbl.querySelectorAll("input.slot-addr").forEach(inp => {
+    inp.addEventListener("blur", () => {
+      const i = parseInt(inp.dataset.slot, 10);
+      const v = parseNum(inp.value) || 0;
+      DE_SLOT_ADDR[i] = v;
+      inp.value = v > 0 ? hex32(v) : "";
+      renderDumpOtaSlotTable();
+    });
+  });
+
+  // 大小输入: 失焦时解析并回写
+  tbl.querySelectorAll("input.slot-size").forEach(inp => {
+    inp.addEventListener("blur", () => {
+      const i = parseInt(inp.dataset.slot, 10);
+      const v = parseNum(inp.value) || 0;
+      DE_SLOT_SIZE[i] = v;
+      inp.value = v > 0 ? hex32(v) : "";
+    });
+  });
+
+  if (sel) sel.value = String(active);
+
+  const foot = $("de_otaSlotSummary");
+  if (foot) {
+    const nValid = DE_SLOT_ADDR.slice(0, count).filter(a => a > 0).length;
+    foot.textContent = "配置区: ota_slot_count = " + count +
+                       "，active_slot = " + active +
+                       "，已配置地址 " + nValid + "/" + count + " 个";
+  }
+}
+
+/** 从表单读取槽 i 的大小 */
+function readSlotSizeFromForm(i) {
+  return DE_SLOT_SIZE[i] || 0;
+}
+
+/** 从编辑表单读出配置对象 */
+function readDumpEditForm() {
+  const num = (id, name) => {
+    const v = parseInt($(id).value, 10);
+    if (isNaN(v)) throw new Error(name + " 必须是数字");
+    return v;
+  };
+
+  let i2cAddrStr = $("de_i2caddr").value.trim();
+  let i2cAddr = /^0x/i.test(i2cAddrStr) ? parseInt(i2cAddrStr, 16) : parseInt(i2cAddrStr, 10);
+  if (isNaN(i2cAddr)) throw new Error("I2C 地址格式错误");
+
+  const flags = readDeFlagsFromBox();
+
+  const cfg = {
+    flags,
+    wait_seconds: num("de_wait", "等待秒数"),
+    wifi_ssid: $("de_ssid").value,
+    wifi_password: $("de_password").value,
+    wifi_channel: num("de_channel", "信道"),
+    wifi_ip: $("de_ip").value.trim(),
+    wifi_netmask: $("de_netmask").value.trim(),
+    i2c_scl_gpio: num("de_scl", "SCL 引脚"),
+    i2c_sda_gpio: num("de_sda", "SDA 引脚"),
+    i2c_addr: i2cAddr,
+    uart_port: parseInt($("de_uartport").value, 10),
+    uart_tx_gpio: parsePinOr($("de_uarttx").value, UART_PIN_DEFAULT),
+    uart_rx_gpio: parsePinOr($("de_uartrx").value, UART_PIN_DEFAULT),
+    uart_baudrate: num("de_baud", "波特率"),
+    trig_gpio: num("de_trig", "触发引脚"),
+    trig_gpio_level: parseInt($("de_triglevel").value, 10),
+    boot_param: $("de_bootparam").value,
+    // 多 OTA 槽
+    ota_slot_count: Math.max(1, Math.min(
+      parseInt($("de_otaslots").value, 10) || 1, OTA_SLOT_MAX)),
+    active_slot: parseInt($("de_activeslot").value, 10) || 0,
+    ota_gpio: (parseInt($("de_otagpio").value, 10) || 0) & 0xFF,
+    // 槽加载地址/大小 (配置区 slot_addr[] / slot_size[]，用户手填)
+    slot_addr: DE_SLOT_ADDR.slice(0, OTA_SLOT_MAX),
+    slot_size: DE_SLOT_SIZE.slice(0, OTA_SLOT_MAX),
+    data_ver: CFG_DATA_VER,
+  };
+
+  /*
+   * 槽地址校验 (与固件 sanitize() 一致):
+   *   0 = 未配置 (合法); 非 0 必须落在可变区且不超 32 位。
+   */
+  for (let i = 0; i < cfg.slot_addr.length; i++) {
+    const a = cfg.slot_addr[i] || 0;
+    if (a === 0) continue;
+    if (a < FIXED_REGION_END || a > 0xFFFFFFFF) {
+      throw new Error("槽 " + i + " 加载地址 " + hex32(a) +
+                      " 非法 (须为 0 或 >= " + hex32(FIXED_REGION_END) + ")");
+    }
+  }
+
+  return cfg;
+}
+
+/**
+ * 从设备读取一段 flash 并显示进度（doDump 与 dumpCfgForEdit 共用）
+ *
+ * @param addr 起始地址
+ * @param size 长度（字节）
+ * @param label 范围名称（用于日志）
+ * @returns Uint8Array
+ */
+async function readFlashWithProgress(addr, size, label) {
+  dumpTermWrite("=== 读取 Flash ===", "t-info");
+  dumpTermWrite("范围 " + label + "，地址 " + hex32(addr) +
+                "，长度 " + size + " 字节", "t-dim");
+
+  const t0 = Date.now();
+  const data = await FLASHER.loader.readFlash(addr, size,
+    (pkt, progress, total) => {
+      const pct = total > 0 ? (progress / total) * 100 : 0;
+      dumpSetProgress(pct, "已读取 " + progress.toLocaleString() + " / " +
+                      total.toLocaleString() + " 字节 (" + pct.toFixed(1) + "%)");
+    });
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+  if (!data || data.length === 0) {
+    throw new Error("读取返回空数据");
+  }
+
+  dumpSetProgress(100, "读取完成，共 " + data.length.toLocaleString() + " 字节");
+  dumpTermWrite("读取完成: " + data.length + " 字节，耗时 " + elapsed + " 秒", "t-ok");
+  return { data, elapsed };
+}
+
+/** 读回配置区并进入编辑模式（读取 + 解析 + 填入编辑表单） */
+async function dumpCfgForEdit() {
+  if (DUMPEDIT.busy || DUMP.busy) return;
+  if (!FLASHER.connected) {
+    showStatus("请先在「烧录到设备」中连接设备", "err");
+    return;
+  }
+
+  DUMPEDIT.busy = true;
+  setDumpButtons(false);
+  dumpTermClear();
+  dumpHideProgress();
+  $("dumpResultBox").style.display = "none";
+  $("dumpEditBox").style.display = "none";
+
+  try {
+    const addr = DUMP_SCOPES.cfg.addr;
+    const size = DUMP_SCOPES.cfg.size;
+
+    const { data } = await readFlashWithProgress(addr, size, "配置区");
+
+    if (data.length < CFG_PART_SIZE) {
+      throw new Error("读取数据不足 " + CFG_PART_SIZE + " 字节");
+    }
+
+    // 解析两个槽
+    const s0 = parseSlot(data, 0);
+    const s1 = parseSlot(data, SLOT_SIZE);
+    let best = null;
+    for (const s of [s0, s1]) if (s.valid && (!best || s.seq > best.seq)) best = s;
+
+    if (!best) {
+      dumpTermWrite("槽 0: " + (s0.valid ? "有效 seq=" + s0.seq : s0.reason), "t-warn");
+      dumpTermWrite("槽 1: " + (s1.valid ? "有效 seq=" + s1.seq : s1.reason), "t-warn");
+      throw new Error("配置区无有效槽，无法编辑。可先用默认值写回。");
+    }
+
+    const cfg = decodeData(best.data);
+    DUMPEDIT.raw = data;
+    DUMPEDIT.cfg = JSON.parse(JSON.stringify(cfg));
+
+    dumpTermWrite("读取成功：槽 " + (best === s0 ? 0 : 1) + " (seq=" + best.seq + ")", "t-ok");
+    dumpTermWrite("SSID=" + cfg.wifi_ssid + ", IP=" + cfg.wifi_ip, "t-dim");
+
+    // 显示结果摘要
+    const rows = [
+      ["读取地址", hex32(addr) + " ~ " + hex32(addr + data.length)],
+      ["槽 0", s0.valid ? '<span class="badge ok">有效</span> seq=' + s0.seq
+                        : '<span class="badge err">无效</span> ' + s0.reason],
+      ["槽 1", s1.valid ? '<span class="badge ok">有效</span> seq=' + s1.seq
+                        : '<span class="badge err">无效</span> ' + s1.reason],
+      ["当前生效", "槽 " + (best === s0 ? 0 : 1) + " (seq=" + best.seq + ")"],
+    ];
+    $("dumpResult").innerHTML = rows
+      .map(([k, v]) => "<tr><td>" + k + "</td><td>" + v + "</td></tr>").join("");
+    $("dumpResultBox").style.display = "";
+
+    // 填入编辑表单
+    fillDumpEditForm(cfg);
+    $("dumpEditHint").innerHTML =
+      "写回位置: <code>" + hex32(addr) + "</code>（8KB，仅配置区）";
+    $("dumpEditBox").style.display = "";
+
+    showStatus(
+      "已读回配置，可修改后写回设备。\n" +
+      "  当前 SSID: " + cfg.wifi_ssid + "\n" +
+      "  当前 IP:   " + cfg.wifi_ip,
+      "ok"
+    );
+    $("dumpEditBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (err) {
+    dumpTermWrite("读取失败: " + (err.message || err), "t-err");
+    showStatus("读取配置区失败: " + (err.message || err), "err");
+  } finally {
+    DUMPEDIT.busy = false;
+    setDumpButtons(true);
+    setTimeout(dumpHideProgress, 1500);
+  }
+}
+
+/** 把编辑后的配置写回设备 */
+async function dumpWriteBack() {
+  if (DUMPEDIT.busy) return;
+  if (!FLASHER.connected) {
+    showStatus("请先连接设备", "err");
+    return;
+  }
+
+  let cfg;
+  try {
+    cfg = readDumpEditForm();
+  } catch (err) {
+    showStatus(err.message, "err");
+    return;
+  }
+
+  const addr = DUMP_SCOPES.cfg.addr;
+  const part = buildPartition(cfg);
+
+  if (!confirm(
+    "即将写回配置区到设备：\n\n" +
+    "  地址: " + hex32(addr) + " (8KB)\n" +
+    "  SSID: " + cfg.wifi_ssid + "\n" +
+    "  AP IP: " + cfg.wifi_ip + "\n" +
+    "  等待: " + cfg.wait_seconds + " 秒\n" +
+    "  flags: " + hex32(cfg.flags) + "\n\n" +
+    "只写配置区，不影响 IAP 程序与用户程序。\n" +
+    "写回后需重启设备才能生效。确认继续？"
+  )) return;
+
+  DUMPEDIT.busy = true;
+  setDumpButtons(false);
+  dumpTermWrite("", "");
+  dumpTermWrite("=== 写回配置区 ===", "t-info");
+
+  try {
+    await FLASHER.loader.writeFlash({
+      fileArray: [{ data: part, address: addr }],
+      flashMode: "dio", flashFreq: "80m",
+      flashSize: flashSizeForEsptool(),
+      eraseAll: false, compress: true,
+      reportProgress: (i, w, t) => {
+        const pct = t > 0 ? w / t * 100 : 0;
+        dumpSetProgress(pct, "写入 " + w + " / " + t + " 字节");
+      },
+    });
+
+    dumpSetProgress(100, "写入完成，正在校验...");
+    dumpTermWrite("写入完成，回读校验...", "t-info");
+
+    // 回读校验
+    const verify = await FLASHER.loader.readFlash(addr, CFG_PART_SIZE, null);
+    const chk = parseSlot(verify, 0);
+    if (!chk.valid) {
+      throw new Error("回读校验失败: " + chk.reason);
+    }
+    const back = decodeData(chk.data);
+    const diffs = [];
+    for (const k of ["wifi_ssid", "wifi_password", "wifi_ip", "wifi_netmask",
+                     "wait_seconds", "flags", "i2c_scl_gpio", "i2c_sda_gpio",
+                     "i2c_addr", "uart_port", "uart_tx_gpio", "uart_rx_gpio",
+                     "uart_baudrate",
+                     "trig_gpio", "trig_gpio_level", "boot_param"]) {
+      if (String(back[k]) !== String(cfg[k])) {
+        diffs.push(k + ": 写入 " + cfg[k] + " → 读回 " + back[k]);
+      }
+    }
+    if (diffs.length) {
+      throw new Error("回读不一致:\n  " + diffs.join("\n  "));
+    }
+
+    dumpTermWrite("回读校验通过", "t-ok");
+    dumpTermWrite("=== 写回成功 ===", "t-ok");
+
+    showStatus(
+      "配置已写回设备并校验通过！\n" +
+      "  SSID: " + cfg.wifi_ssid + "\n" +
+      "  AP IP: " + cfg.wifi_ip + "\n\n" +
+      "需重启设备才能生效（可在「10」区块点「断开」后重新连接，或按设备复位键）。",
+      "ok"
+    );
+
+    // 更新本地缓存
+    DUMPEDIT.raw = verify;
+    DUMPEDIT.cfg = JSON.parse(JSON.stringify(cfg));
+  } catch (err) {
+    dumpTermWrite("写回失败: " + (err.message || err), "t-err");
+    showStatus("写回失败: " + (err.message || err), "err");
+  } finally {
+    DUMPEDIT.busy = false;
+    setDumpButtons(true);
+    setTimeout(dumpHideProgress, 1500);
+  }
+}
+
+/** 导出当前编辑的配置为 bin */
+function dumpExportEdited() {
+  try {
+    const cfg = readDumpEditForm();
+    const part = buildPartition(cfg);
+    const fname = "iap_cfg_edited_" +
+      new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".bin";
+    downloadBytes(part, fname);
+    dumpTermWrite("已导出: " + fname, "t-ok");
+    showStatus("已导出配置区镜像 " + fname + "\n可单独烧录到 0x10000", "ok");
+  } catch (err) {
+    showStatus(err.message, "err");
+  }
+}
+
+
+/* ==========================================================================
+ * 用户程序烧录（IAP 协议 + XMODEM）
+ *
+ * 与配置区烧录的区别:
+ *   - 配置区: 用 esptool-js 直接写 flash (0x10000)
+ *   - 用户程序: 走设备 IAP 协议 —— 通过串口终端发 "xmodem recv"，
+ *     设备进入 XMODEM 接收模式，再把打包好的用户程序用 XMODEM 发过去。
+ *     设备会写入 user_app 分区并检查镜像首字节。
+ *
+ * 因此这部分需要直接操作串口（Web Serial 的 reader/writer），
+ * 与 esptool-js 的 Transport 互斥：必须先断开 esptool 连接。
+ * ========================================================================== */
+
+/* XMODEM 控制字符 */
+const XM_SOH = 0x01, XM_STX = 0x02, XM_EOT = 0x04, XM_ACK = 0x06;
+const XM_NAK = 0x15, XM_CAN = 0x18, XM_CRC_CHAR = 0x43;   // 'C'
+
+/* 用户程序烧录复用「烧录到设备」的终端与进度条 */
+function appTermWrite(msg, cls = "") { termWrite(msg, cls); }
+function appTermClear() { termClear(); }
+function appSetProgress(pct, text) { setProgress(pct, text); }
+function appHideProgress() { hideProgress(); }
+
+/* --- 串口读写封装（用于 IAP 协议，非 esptool） --- */
+
+/**
+ * 一个极简的串口会话：直接用 Web Serial 的 reader/writer，
+ * 带超时读取与取消支持。
+ */
+class SerialSession {
+  constructor(port, baud) {
+    this.port = port;
+    this.baud = baud;
+    this.reader = null;
+    this.writer = null;
+    this.rxBuf = [];        // 已读入但未消费的字节
+    this.cancelled = false;
+  }
+
+  async open() {
+    await this.port.open({ baudRate: this.baud });
+    this.writer = this.port.writable.getWriter();
+  }
+
+  async close() {
+    try { if (this.writer) { this.writer.releaseLock(); this.writer = null; } } catch (_) {}
+    try { if (this.reader) { await this.reader.cancel(); this.reader.releaseLock(); this.reader = null; } } catch (_) {}
+    try { await this.port.close(); } catch (_) {}
+  }
+
+  /** 确保有 reader 在跑（后台持续读取到 rxBuf） */
+  _ensureReader() {
+    if (this.reader) return;
+    this.reader = this.port.readable.getReader();
+    this._pump();
+  }
+
+  async _pump() {
+    try {
+      while (this.reader) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        if (value) for (let i = 0; i < value.length; i++) this.rxBuf.push(value[i]);
+      }
+    } catch (_) { /* 关闭时正常抛出 */ }
+  }
+
+  async write(bytes) {
+    await this.writer.write(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  }
+
+  /** 读取 1 字节，超时返回 null */
+  async readByte(timeoutMs) {
+    this._ensureReader();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.cancelled) return null;
+      if (this.rxBuf.length) return this.rxBuf.shift();
+      await new Promise(r => setTimeout(r, 5));
+    }
+    return null;
+  }
+
+  /** 读取指定长度，超时返回已读到的部分 */
+  async readExact(len, timeoutMs) {
+    this._ensureReader();
+    const out = [];
+    const deadline = Date.now() + timeoutMs;
+    while (out.length < len && Date.now() < deadline) {
+      if (this.cancelled) break;
+      if (this.rxBuf.length) { out.push(this.rxBuf.shift()); continue; }
+      await new Promise(r => setTimeout(r, 5));
+    }
+    return new Uint8Array(out);
+  }
+
+  /** 读走缓冲区中所有内容（用于清理回显） */
+  drain() {
+    const n = this.rxBuf.length;
+    this.rxBuf.length = 0;
+    return n;
+  }
+
+  /** 等待某个字节出现，期间把其它字节交给 onOther 回调 */
+  async waitFor(target, timeoutMs, onOther) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.cancelled) return false;
+      if (this.rxBuf.length) {
+        const b = this.rxBuf.shift();
+        if (b === target) return true;
+        if (onOther) onOther(b);
+        continue;
+      }
+      await new Promise(r => setTimeout(r, 5));
+    }
+    return false;
+  }
+}
+
+/* --- XMODEM 发送 --- */
+
+/** 计算 XMODEM 用的 CRC16-CCITT (poly 0x1021, init 0xFFFF, 非反射) */
+function xmodemCrc16(bytes) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= (bytes[i] << 8) & 0xFFFF;
+    for (let b = 0; b < 8; b++) {
+      crc = (crc & 0x8000) ? (((crc << 1) ^ 0x1021) & 0xFFFF) : ((crc << 1) & 0xFFFF);
+    }
+  }
+  return crc & 0xFFFF;
+}
+
+/**
+ * 用 XMODEM-1K 发送数据。
+ *
+ * @param session   SerialSession
+ * @param data      Uint8Array
+ * @param onProgress (sent, total) => void
+ * @param log       (msg, cls) => void
+ */
+async function xmodemSend(session, data, onProgress, log) {
+  const PKT_TIMEOUT = 10000;   // 等待 ACK/NAK 的超时
+  const HANDSHAKE_TIMEOUT = 60000;
+
+  // --- 1. 握手: 等待接收方发 'C' ---
+  log("等待设备进入 XMODEM 接收模式 (等待 'C')...", "t-info");
+  let gotC = false;
+  const hsDeadline = Date.now() + HANDSHAKE_TIMEOUT;
+  while (Date.now() < hsDeadline) {
+    if (session.cancelled) throw new Error("已取消");
+    const b = await session.readByte(500);
+    if (b === null) continue;
+    if (b === XM_CRC_CHAR) { gotC = true; break; }
+    if (b === XM_NAK) {
+      // 接收方请求校验和模式，本实现只支持 CRC —— 继续等 'C'
+      log("收到 NAK（校验和模式），继续等待 CRC 模式...", "t-warn");
+      continue;
+    }
+    if (b === XM_CAN) throw new Error("设备取消了传输");
+    // 其它字节可能是设备回显的终端文本，忽略
+  }
+  if (!gotC) throw new Error("等待 'C' 超时：设备未进入 XMODEM 接收模式");
+
+  log("收到 'C'，开始传输 " + data.length + " 字节", "t-ok");
+
+  // --- 2. 分包发送 ---
+  const total = data.length;
+  let offset = 0;
+  let seq = 1;
+  let sent = 0;
+
+  while (offset < total) {
+    if (session.cancelled) {
+      await session.write([XM_CAN, XM_CAN, XM_CAN]);
+      throw new Error("已取消");
+    }
+
+    const remaining = total - offset;
+    // 剩余 > 128 用 1K 包，否则用 128 字节包
+    const pktLen = (remaining > 128) ? 1024 : 128;
+    const chunk = data.subarray(offset, offset + pktLen);
+
+    // 组装包: <SOH|STX> <seq> <255-seq> <data(补 0x1A)> <crc_hi> <crc_lo>
+    const buf = new Uint8Array(3 + pktLen + 2);
+    buf[0] = (pktLen === 1024) ? XM_STX : XM_SOH;
+    buf[1] = seq & 0xFF;
+    buf[2] = (255 - seq) & 0xFF;
+    buf.fill(0x1A, 3, 3 + pktLen);      // 填充符
+    buf.set(chunk, 3);
+    const crc = xmodemCrc16(buf.subarray(3, 3 + pktLen));
+    buf[3 + pktLen] = (crc >> 8) & 0xFF;
+    buf[3 + pktLen + 1] = crc & 0xFF;
+
+    // 发送并等待 ACK（最多重试 10 次）
+    let acked = false;
+    for (let retry = 0; retry < 10 && !acked; retry++) {
+      await session.write(buf);
+
+      const deadline = Date.now() + PKT_TIMEOUT;
+      while (Date.now() < deadline) {
+        if (session.cancelled) throw new Error("已取消");
+        const resp = await session.readByte(300);
+        if (resp === null) continue;
+        if (resp === XM_ACK) { acked = true; break; }
+        if (resp === XM_NAK) {
+          log("包 " + seq + " NAK，重传 (" + (retry + 1) + "/10)", "t-warn");
+          break;
+        }
+        if (resp === XM_CAN) throw new Error("设备取消了传输");
+        // 忽略其它字节
+      }
+      if (!acked && Date.now() >= deadline) {
+        log("包 " + seq + " 超时，重传 (" + (retry + 1) + "/10)", "t-warn");
+      }
+    }
+    if (!acked) throw new Error("包 " + seq + " 重传 10 次仍失败");
+
+    offset += chunk.length;
+    sent += chunk.length;
+    seq = (seq + 1) & 0xFF;
+    if (onProgress) onProgress(sent, total);
+  }
+
+  // --- 3. 发送 EOT ---
+  log("发送 EOT 结束传输...", "t-info");
+  for (let retry = 0; retry < 10; retry++) {
+    await session.write([XM_EOT]);
+    const deadline = Date.now() + PKT_TIMEOUT;
+    while (Date.now() < deadline) {
+      if (session.cancelled) throw new Error("已取消");
+      const resp = await session.readByte(300);
+      if (resp === null) continue;
+      if (resp === XM_ACK) {
+        log("传输完成", "t-ok");
+        return;
+      }
+      if (resp === XM_NAK) break;   // 重发 EOT
+      if (resp === XM_CAN) throw new Error("设备取消了传输");
+    }
+  }
+  throw new Error("EOT 未被确认");
+}
+
+/* --- 用户程序烧录运行态 --- */
+
+const APPFLASH = {
+  session: null,
+  busy: false,
+};
+
+/*
+ * 用户程序烧录地址 —— 由**设备上的分区表 B** 决定。
+ *
+ * ⚠️ 分区表 B 属于**用户程序工程**（`partitions_user_app.csv`，
+ *    `PARTITION_TABLE_OFFSET=0x140000`），随 user.bin 一起编译烧录，
+ *    **HTML 不生成、不修改它**。
+ *
+ * 地址来源优先级:
+ *   1. 从设备 flash 读回的**分区表 B**（0x140000，4KB）—— 权威
+ *   2. 从加载的 user.bin 配套信息推断（若可用）
+ *   3. 常量 USER_APP_ADDR (0x150000) 兜底（仅界面提示）
+ */
+
+/** 默认值 (4MB flash)，无设备信息时用于界面提示 */
+const USER_APP_SIZE_DEFAULT = 0x2B0000;   // 2752 KB
+
+/** 设备上读回的分区表 B 缓存 (由 refreshDevicePtableB() 填充) */
+let DEV_PTABLE_B = null;   // { parts: [...], readAt: ts }
+
+/**
+ * 从设备读取分区表 B (0x140000, 4KB) 并缓存
+ *
+ * @returns {Promise<Array|null>} 分区条目数组，失败返回 null
+ */
+async function refreshDevicePtableB() {
+  if (!FLASHER.connected || !FLASHER.loader) return null;
+  try {
+    const data = await FLASHER.loader.readFlash(
+      PARTITION_TABLE_B_OFFSET, PARTITION_TABLE_SIZE);
+    const bytes = (data instanceof Uint8Array) ? data : new Uint8Array(data);
+    const parts = parsePartitionTableBin(bytes);
+    if (parts.length === 0) {
+      DEV_PTABLE_B = null;
+      termWrite("设备分区表 B 为空 (0x" + PARTITION_TABLE_B_OFFSET.toString(16) +
+                ")，可能尚未烧录用户程序", "t-warn");
+      return null;
+    }
+    DEV_PTABLE_B = { parts, readAt: Date.now() };
+    termWrite("已读取设备分区表 B: " + parts.length + " 个分区", "t-ok");
+    return parts;
+  } catch (e) {
+    DEV_PTABLE_B = null;
+    termWrite("读取设备分区表 B 失败: " + (e.message || e), "t-warn");
+    return null;
+  }
+}
+
+/** 清空设备分区表 B 缓存 (断开连接时调用) */
+function clearDevicePtableB() {
+  DEV_PTABLE_B = null;
+}
+
+/**
+ * 解析指定 OTA 槽的分区信息（来自**设备上的分区表 B**）
+ *
+ * @param {number} [slot] 槽序号 (0=ota_0/user_app, 1=ota_1/user_app_1, ...)
+ *                        默认取表单中的 active_slot
+ * @returns {{name:string, slot:number, offset:number, size:number, source:string}}
+ */
+function resolveOtaSlotPart(slot) {
+  if (slot === undefined || slot === null) {
+    // 默认取当前活动槽 (从设备分区表 B 读回时已记录)
+    slot = (DEV_PTABLE_B && DEV_PTABLE_B.activeSlot !== undefined)
+         ? DEV_PTABLE_B.activeSlot : 0;
+  }
+  slot = Math.max(0, Math.min(slot, OTA_SLOT_MAX - 1));
+
+  // --- 1. 设备上读回的分区表 B (权威) ---
+  if (DEV_PTABLE_B && DEV_PTABLE_B.parts) {
+    const p = DEV_PTABLE_B.parts.find(
+      x => x.type === 0x00 && x.subtype === (0x10 + slot));
+    if (p) {
+      return { name: p.name, slot, offset: p.offset, size: p.size,
+               source: "设备分区表 B" };
+    }
+  }
+
+  // --- 2. 兜底: 常量 (仅用于界面提示，烧录前会要求先读设备) ---
+  return { name: slot === 0 ? "user_app" : ("user_app_" + slot), slot,
+           offset: USER_APP_ADDR + slot * USER_APP_SIZE_DEFAULT,
+           size: USER_APP_SIZE_DEFAULT, source: "默认值 (未读设备)" };
+}
+
+/* --------------------------------------------------------------------------
+ * 多 OTA 槽: 表单读写
+ * ------------------------------------------------------------------------ */
+
+/*
+ * 槽数量的权威来源是**配置区里的 ota_slot_count**（用户在「APP 启动槽」
+ * 手动增删），不再是设备分区表 B。
+ *
+ * 分区表 B 只在烧录/擦除用户程序时用于定位目标槽的地址/大小
+ * （见 resolveOtaSlotPart）。
+ */
+
+/**
+ * 解析当前生效的 user_app 分区信息（兼容旧调用，等价于槽 0）
+ */
+function resolveUserAppPart() {
+  return resolveOtaSlotPart();
+}
+
+/** 当前 user_app 分区起始地址（来自分区表 B） */
+function currentUserAppAddr() {
+  return resolveUserAppPart().offset;
+}
+
+/**
+ * 获取当前 user_app 分区大小（来自分区表 B）
+ */
+function currentUserAppSize() {
+  return resolveUserAppPart().size;
+}
+
+function initAppFlasher() {
+  $("btnAppErase").addEventListener("click", eraseUserApp);
+  $("btnAppInfo").addEventListener("click", queryUserApp);
+  $("btnAppBoot").addEventListener("click", bootUserApp);
+}
+
+/* -------------------------------------------------------------------------- */
+/* 强制进入 IAP —— 已取消 (v5)                                                  */
+/* -------------------------------------------------------------------------- */
+/*
+ * v4 及以前: 向 flash iap_mark 分区 (0x14000) 写入魔术标记。
+ *
+ * v5 起已取消 flash 标志区, 替代方案 (详见 docs/FINAL-REPORT.md §3.3):
+ *   A. GPIO0 电平检测  —— 上电时按住 BOOT 键
+ *   B. UART 命令       —— 等待窗口内发 "iap" 字符串
+ *   C. 用户程序主动请求 —— 写 RTC RAM boot_target=0 → esp_restart()
+ *   D. 断电重上电      —— 冷启动 RTC RAM 无效 → 默认进 IAP
+ *
+ * 因此本工具不再提供「强制进入 IAP」按钮。
+ */
+
+
+/**
+ * 解析 ESP 应用镜像头 (24 字节)
+ *
+ * 结构 (esp_image_header_t):
+ *   0  magic(1)          固定 0xE9
+ *   1  segment_count(1)
+ *   2  spi_mode(1)
+ *   3  spi_speed/size(1)
+ *   4  entry_addr(4)
+ *   8  wp_pin(1) + spi_pin_drv(3)
+ *   12 chip_id(2)
+ *   14 min_chip_rev(1)
+ *   15 reserved(9)
+ *
+ * 注意: 不再有自定义 512B 文件头。分区内就是纯 ESP 镜像，
+ *       完整性由 bootloader 启动时校验 (magic/段表/SHA256/chip_id)。
+ */
+function parseIapImageHeader(bytes) {
+  if (bytes.length < 24) {
+    return { valid: false, reason: "文件小于 24 字节，不是有效的 ESP 镜像" };
+  }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  if (bytes[0] !== 0xE9) {
+    return {
+      valid: false,
+      reason: "首字节为 0x" + bytes[0].toString(16).toUpperCase().padStart(2, "0") +
+              "，不是 ESP 镜像 magic (0xE9)",
+    };
+  }
+
+  const segment_count = bytes[1];
+  if (segment_count === 0 || segment_count > 16) {
+    return { valid: false, reason: "段数量异常 (" + segment_count + ")" };
+  }
+
+  return {
+    valid: true,
+    segment_count,
+    spi_mode: bytes[2],
+    spi_speed: bytes[3],
+    entry_addr: dv.getUint32(4, true),
+    chip_id: dv.getUint16(12, true),
+  };
+}
+
+/**
+ * 建立 IAP 协议会话。
+ *
+ * 注意：esptool-js 与直接串口读写不能同时持有端口，
+ * 因此这里要求先断开 esptool 连接。
+ */
+async function openIapSession(baud) {
+  // 必须先用 esptool 连接过（拿到 port 对象）
+  if (!FLASHER.port) {
+    throw new Error("请先在「烧录到设备」中连接设备（用于获取串口权限）");
+  }
+
+  // 先保存 port 引用 —— cleanupFlasher() 会把 FLASHER.port 置 null
+  const port = FLASHER.port;
+
+  // 若 esptool 仍持有端口，先断开以释放串口
+  if (FLASHER.connected) {
+    appTermWrite("断开 esptool 连接以释放串口...", "t-info");
+    await cleanupFlasher();
+    $("btnConnect").disabled = false;
+  }
+
+  const session = new SerialSession(port, baud);
+  await session.open();
+  return session;
+}
+
+/** 发送终端命令并等待回显 */
+async function sendTermCmd(session, cmd, waitMs = 800) {
+  session.drain();
+  await session.write(new TextEncoder().encode(cmd + "\r"));
+  const out = [];
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const b = await session.readByte(200);
+    if (b === null) continue;
+    out.push(b);
+  }
+  return new TextDecoder("utf-8", { force: false }).decode(new Uint8Array(out));
+}
+
+/**
+ * 统一刷新「烧录到设备」的按钮可用状态
+ */
+function setFlashButtons(enabled) {
+  const canAppCmd = FLASHER.connected;
+
+  updateBurnSummary();   // 内部会设置 btnFlash
+
+  // v5: btnForceIap 已删除 (flash 标志区取消，救援改用 GPIO0/断电)
+  const ids = ["btnAppErase", "btnAppInfo", "btnAppBoot"];
+  for (const id of ids) {
+    const el = $(id);
+    if (el) el.disabled = !enabled || !canAppCmd;
+  }
+}
+
+/** 擦除用户程序区 */
+async function eraseUserApp() {
+  if (APPFLASH.busy) return;
+  const method = "flash";
+
+  if (method === "flash") {
+    // 用 esptool 擦除 user_app 分区 (地址/大小来自分区表 B)
+    if (!FLASHER.connected) { showStatus("请先连接设备", "err"); return; }
+    const ua = resolveUserAppPart();
+    if (!confirm(
+      "即将擦除 user_app 分区 (" + hex32(ua.offset) + ", " +
+      (ua.size / 1024).toFixed(0) + " KB)。\n" +
+      "来源: " + ua.source + "\n\n" +
+      "设备上已有的用户程序将被清除。确认继续？"
+    )) return;
+
+    APPFLASH.busy = true;
+    setFlashButtons(false);
+    appTermClear();
+    appHideProgress();
+    try {
+      appTermWrite("正在擦除 user_app 分区 " + hex32(ua.offset) +
+                   " (" + (ua.size / 1024).toFixed(0) + " KB) ...", "t-info");
+      await FLASHER.loader.eraseRegion(ua.offset, ua.size);
+      appTermWrite("擦除完成", "t-ok");
+      showStatus("用户程序区已擦除", "ok");
+    } catch (err) {
+      // 回退：写入全 0xFF
+      appTermWrite("eraseRegion 不可用，改用写入 0xFF: " + (err.message || err), "t-warn");
+      try {
+        const blank = new Uint8Array(ua.size).fill(0xFF);
+        await FLASHER.loader.writeFlash({
+          fileArray: [{ data: blank, address: ua.offset }],
+          flashMode: "dio", flashFreq: "80m",
+          flashSize: flashSizeForEsptool(),
+          eraseAll: false, compress: true,
+          reportProgress: (i, w, t) => appSetProgress(t ? w / t * 100 : 0, "擦除中..."),
+        });
+        appTermWrite("擦除完成", "t-ok");
+        showStatus("用户程序区已擦除", "ok");
+      } catch (e2) {
+        appTermWrite("擦除失败: " + (e2.message || e2), "t-err");
+        showStatus("擦除失败: " + (e2.message || e2), "err");
+      }
+    } finally {
+      APPFLASH.busy = false;
+      setFlashButtons(true);
+      setTimeout(appHideProgress, 1200);
+    }
+    return;
+  }
+
+  // XMODEM 方式：用设备终端命令
+  if (!FLASHER.port) { showStatus("请先连接设备", "err"); return; }
+  if (!confirm("即将擦除 user_app 分区。\n\n设备上已有的用户程序将被清除。确认继续？")) return;
+
+  APPFLASH.busy = true;
+  setFlashButtons(false);
+  appTermClear();
+  let session = null;
+  try {
+    session = await openIapSession(parseInt($("flashBaud").value, 10));
+    appTermWrite("发送命令: app erase", "t-info");
+    const resp = await sendTermCmd(session, "app erase", 3000);
+    appTermWrite(resp.replace(/\r/g, ""), "t-dim");
+    showStatus("用户程序区已擦除", "ok");
+  } catch (err) {
+    appTermWrite("失败: " + (err.message || err), "t-err");
+    showStatus("擦除失败: " + (err.message || err), "err");
+  } finally {
+    try { if (session) await session.close(); } catch (_) {}
+    APPFLASH.busy = false;
+    setFlashButtons(true);
+  }
+}
+
+/** 查询用户程序信息 */
+async function queryUserApp() {
+  if (APPFLASH.busy) return;
+  if (!FLASHER.port) { showStatus("请先连接设备", "err"); return; }
+
+  APPFLASH.busy = true;
+  setFlashButtons(false);
+  appTermClear();
+  let session = null;
+  try {
+    session = await openIapSession(parseInt($("flashBaud").value, 10));
+    appTermWrite("发送命令: app info", "t-info");
+    const resp = await sendTermCmd(session, "app info", 2500);
+    appTermWrite(resp.replace(/\r/g, ""), "t-dim");
+  } catch (err) {
+    appTermWrite("失败: " + (err.message || err), "t-err");
+  } finally {
+    try { if (session) await session.close(); } catch (_) {}
+    APPFLASH.busy = false;
+    setFlashButtons(true);
+  }
+}
+
+/** 启动用户程序 */
+async function bootUserApp() {
+  if (APPFLASH.busy) return;
+  if (!FLASHER.port) { showStatus("请先连接设备", "err"); return; }
+  if (!confirm("即将重启并启动用户程序。\n\n设备会离开 IAP 模式。确认继续？")) return;
+
+  APPFLASH.busy = true;
+  setFlashButtons(false);
+  appTermClear();
+  let session = null;
+  try {
+    session = await openIapSession(parseInt($("flashBaud").value, 10));
+    appTermWrite("发送命令: app boot", "t-info");
+    await session.write(new TextEncoder().encode("app boot\r"));
+    await new Promise(r => setTimeout(r, 1000));
+    const resp = await sendTermCmd(session, "", 1500);
+    appTermWrite(resp.replace(/\r/g, ""), "t-dim");
+    showStatus("已发送启动命令，设备正在切换到用户程序", "ok");
+  } catch (err) {
+    appTermWrite("失败: " + (err.message || err), "t-err");
+  } finally {
+    try { if (session) await session.close(); } catch (_) {}
+    APPFLASH.busy = false;
+    setFlashButtons(true);
+  }
+}
+
+init();
+
+/* ==========================================================================
+ * 调试接口（供自动化测试 / 控制台排查使用）
+ *
+ * 模块作用域内的函数默认不暴露到 window，这里显式挂载少量只读接口，
+ * 便于在浏览器控制台检查状态或做自动化验证。
+ * ========================================================================== */
+window.IAPDebug = {
+  // 状态查询
+  getState: () => ({
+    hasFile: fileState !== null,
+    fileName: fileState ? fileState.name : null,
+    isFullImage: fileState ? fileState.isFullImage : null,
+    cfgOffset: fileState ? fileState.cfgOffset : null,
+    esptoolLoaded: ESPTOOL !== null,
+    flasherConnected: FLASHER.connected,
+    chip: FLASHER.chip,
+    // 烧录槽位
+    slots: { boot: !!SLOTS.boot, app: !!SLOTS.app },
+    appBusy: APPFLASH.busy,
+  }),
+  /**
+   * 连接诊断 (排查"已连接但按钮是灰的"问题)
+   */
+  getConnDiag: () => {
+    const ids = ["btnConnect", "btnFlash", "btnDisconnect",
+                 "btnDump", "btnDumpEdit",
+                 "btnAppErase", "btnAppInfo", "btnAppBoot"];
+    const out = {};
+    for (const id of ids) {
+      const el = $(id);
+      out[id] = el ? el.disabled : "MISSING";
+    }
+    return {
+      connected: FLASHER.connected,
+      chip: FLASHER.chip,
+      detectedFlashBytes: FLASHER.detectedFlashBytes,
+      hasLoader: !!FLASHER.loader,
+      hasTransport: !!FLASHER.transport,
+      buttons: out,
+    };
+  },
+  // 手动触发按钮刷新 (排查用)
+  refreshButtons: () => {
+    try { setFlashButtons(true); } catch (e) { return "setFlashButtons: " + e.message; }
+    try { setDumpButtons(true); } catch (e) { return "setDumpButtons: " + e.message; }
+    return "ok";
+  },
+  // 编解码（用于交叉验证）
+  buildPartition, encodeData, decodeData, parseSlot, crc32,
+  // UART 引脚辅助
+  UART_PIN_DEFAULT, UART0_DEFAULT_PINS, parsePinOr, pinText,
+  // USB 能力
+  USB_CHIPS, FLAGS, DEFAULTS, chipSupportsUsb, updateUsbFlagAvailability,
+  // 消息弹窗
+  showStatus, hideStatus, TOAST_STYLE,
+  // 手动触发文件加载 (按槽位)
+  loadBytes: (name, bytes) => {
+    const r = identifyFile(bytes);
+    if (!r.ok) { showStatus("格式错误: " + r.reason, "err"); return false; }
+    const slot = r.kind === "app" ? "app" : "boot";
+    setSlotFile(slot, name, bytes);
+    return true;
+  },
+  // 用户程序相关
+  parseIapImageHeader, xmodemCrc16, xmodemSend, SerialSession,
+  USER_APP_ADDR, USER_APP_SIZE_DEFAULT, currentUserAppSize,
+  resolveUserAppPart, currentUserAppAddr,
+  // 多 OTA 槽 (布局来自设备分区表 B)
+  OTA_SLOT_MAX, resolveOtaSlotPart,
+  refreshDevicePtableB, clearDevicePtableB, getDevicePtableB: () => DEV_PTABLE_B,
+  DUMP_SCOPES, flashSizeBytes, flashSizeForEsptool, parseNum, dumpFileName, downloadBytes,
+  // 分区表 (仅表 A 由本工具生成；表 B 属用户程序工程)
+  buildPartitionTableBin,
+  parsePartitionTableBin,
+  partTypeName, parseFlashSize, fmtBytes, md5Bytes,
+  FIXED_PARTITIONS, FIXED_PARTITIONS_A,
+  PARTITION_TABLE_OFFSET, PARTITION_TABLE_SIZE,
+  PARTITION_TABLE_A_OFFSET, PARTITION_TABLE_B_OFFSET,
+  detectDeviceFlashBytes,
+  // CSV 分区表
+  parsePartitionCsv, buildPartitionTableBinFromParts, validateIapPartitionCsv,
+  // 槽位与烧录
+  PT_END_OFFSET, identifyFile, SLOTS, SLOT_DEFS, SLOT_ENABLED, SLOT_CHK_ID,
+  setSlotFile, clearSlot, pickFileFor, renderSlots, buildBurnSegments,
+  // 区域跳过选项
+  SIDE_REGIONS, SIDE_SKIP, SIDE_SKIP_CHK, sliceIapSide, sideRegionSkipped,
+  updateBootSkipWarn,
+  // 内置 IAP 镜像
+  BUILTIN_BOOTLOADERS, chipKeyFromName, b64ToBytes, loadBuiltinBootloader,
+  applyBootMode, renderBootMode, exportBuiltinBootloader,
+  builtinMeta, hasBuiltinChip, getBuiltinImage, inflateBytes,
+  BOOT_CHIP_ORDER, bootChipLabel, resolveBootChipKey, setBootChip,
+  getBootMode: () => bootMode,
+  setBootMode: (m) => applyBootMode(m, { silent: true }),
+  getBootChip: () => bootChipOverride,
+  setBootChipSilent: (k) => setBootChip(k, { silent: true }),
+  getDumpScope: () => $("dumpScope").value,
+  setDumpScope: (s) => { $("dumpScope").value = s; updateDumpScopeUI(); },
+  // 读回编辑
+  fillDumpEditForm, readDumpEditForm, dumpExportEdited,
+  renderDumpOtaSlotTable,
+  buildDeFlagsBox, setDeFlags, readDeFlagsFromBox, updateDeFlagsField,
+  getDumpEditState: () => ({
+    hasRaw: DUMPEDIT.raw !== null,
+    rawLen: DUMPEDIT.raw ? DUMPEDIT.raw.length : 0,
+    cfg: DUMPEDIT.cfg,
+    busy: DUMPEDIT.busy,
+    editBoxVisible: $("dumpEditBox").style.display !== "none",
+  }),
+  setDumpEditField: (id, val) => { $(id).value = val; },
+  looksLikeUserApp, doBurn, updateBurnSummary,
+  // 按钮状态 (调试用)
+  setFlashButtons, setDumpButtons,
+  getButtonState: () => {
+    const ids = ["btnFlash", "btnAppErase", "btnAppInfo", "btnAppBoot",
+                 "btnDump", "btnDumpEdit", "btnConnect",
+                 "btnDisconnect", "btnPtDetect"];
+    const o = {};
+    for (const id of ids) {
+      const e = $(id);
+      o[id] = e ? e.disabled : null;
+    }
+    return o;
+  },
+  setConnected: (v) => { FLASHER.connected = !!v; },
+  setChip: (name) => {
+    FLASHER.chip = name;
+    FLASHER.connected = !!name;
+    if (typeof refreshBootChipAutoLabel === "function") refreshBootChipAutoLabel();
+    if (typeof applyBootMode === "function") {
+      applyBootMode(bootMode, { silent: true })
+        .then(() => { if (typeof renderSlots === "function") renderSlots(); })
+        .catch(() => { if (typeof renderSlots === "function") renderSlots(); });
+    }
+  },
+  setFileType: (t) => {
+    const r = document.querySelector('input[name="ftype"][value="' + t + '"]');
+  },
+  loadAppBytes: (name, bytes) => {
+    const info = parseIapImageHeader(bytes);
+    return info;
+  },
+};
+</script>
+</body>
+</html>

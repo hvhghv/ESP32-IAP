@@ -1,0 +1,526 @@
+name: Build IAP Firmware
+
+# ============================================================================
+# 构建 ESP IAP 固件（多芯片矩阵）
+# ============================================================================
+#
+# 触发方式:
+#   - push 到 main / master 分支
+#   - 提交 PR（仅构建，不发布）
+#   - 手动触发（可选是否创建 Release）
+#   - 打 tag (v*) 时自动创建 Release
+#
+# 产物（每个芯片一份）:
+#   - iap_side_<chip>.bin            ★ IAP 烧录文件 (1280KB 整片, 0x0)
+#   - esp_iap_<chip>.bin             IAP 应用
+#   - esp_iap_<chip>.elf             带调试符号
+#   - bootloader_<chip>.bin          引导程序
+#   - partition-table_<chip>.bin     分区表 A
+#   - MANIFEST_<chip>.txt            产物清单（大小 + SHA256）
+#
+# iap_side_<chip>.bin 布局（固定区整片 0x0 ~ 0x13FFFF）:
+#   0x000000  bootloader
+#   0x008000  配置区 (iap_cfg, 硬编码)
+#   0x00B000  分区表 A
+#   0x00C000  nvs
+#   0x010000  IAP 应用
+#
+# 烧录（2 个文件，顺序无关）:
+#   esptool.py --chip <芯片> write_flash \
+#       0x0      iap_side_<芯片>.bin \
+#       0x140000 user_<芯片>.bin
+#
+# user_<芯片>.bin 布局（v7: 从 0x140000 开始的单一文件）:
+#   0x140000  分区表 B
+#   0x141000  0xFF 填充 (nvs 位置)
+#   0x150000  应用镜像
+#   IAP 会整段写入该地址（与 esptool 语义一致）。
+#
+# 注意: idf.py flash 不含配置区（iap_cfg 是硬编码地址），
+#       必须经 tools/merge_bin.py 生成才能固化默认配置。
+#
+# 芯片支持情况:
+#   esp32    完整支持（WiFi + I2C 从机）
+#   esp32s2  完整支持
+#   esp32s3  完整支持
+#   esp32c2  无 I2C 从机（SOC_I2C_SUPPORT_SLAVE=0），其余功能正常
+#   esp32c3  完整支持
+#   esp32c6  完整支持
+#   esp32h2  无 WiFi（SOC_WIFI_SUPPORTED=0），其余功能正常
+# ============================================================================
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '创建 Release 并上传产物'
+        required: false
+        default: false
+        type: boolean
+      targets:
+        description: '构建目标（逗号分隔，留空=全部）'
+        required: false
+        default: ''
+        type: string
+
+# 同一分支的重复触发取消旧任务，节省 CI 资源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # ESP-IDF 版本（与本地开发环境保持一致）
+  IDF_VERSION: v6.0.3
+  # 工程名（与 CMakeLists.txt 中 project() 一致）
+  PROJECT_NAME: esp_iap
+
+jobs:
+  # ==========================================================================
+  # 预检: 确定要构建的目标列表
+  # ==========================================================================
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.set.outputs.targets }}
+
+    steps:
+      - name: Determine target list
+        id: set
+        run: |
+          ALL='["esp32","esp32s2","esp32s3","esp32c2","esp32c3","esp32c6","esp32h2"]'
+          INPUT='${{ inputs.targets }}'
+
+          if [ -z "$INPUT" ]; then
+            echo "targets=$ALL" >> $GITHUB_OUTPUT
+            echo "构建全部 7 个目标"
+          else
+            JSON=$(echo "$INPUT" | tr -d ' ' | awk -F, \
+              '{printf "["; for(i=1;i<=NF;i++){printf "\"%s\"", $i; if(i<NF) printf ","}; printf "]"}')
+            echo "targets=$JSON" >> $GITHUB_OUTPUT
+            echo "构建指定目标: $JSON"
+          fi
+
+  # ==========================================================================
+  # 构建: 按芯片矩阵编译
+  # ==========================================================================
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    strategy:
+      # 一个目标失败不影响其他目标继续构建
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      # 缓存 ESP-IDF 工具链与 Python 环境，显著加快后续构建
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+          key: idf-${{ env.IDF_VERSION }}-${{ matrix.target }}-${{ runner.os }}-v2
+          restore-keys: |
+            idf-${{ env.IDF_VERSION }}-${{ matrix.target }}-${{ runner.os }}-
+            idf-${{ env.IDF_VERSION }}-
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: ${{ matrix.target }}
+          path: '.'
+          command: |
+            idf.py set-target ${{ matrix.target }}
+            idf.py build
+
+      # 生成 IAP 烧录文件 (单一连续 1280KB，含 bootloader + 配置区 + 分区表 A + IAP)
+      #
+      # 布局: 0x0 bootloader / 0x8000 配置区 / 0xB000 分区表A / 0xC000 nvs / 0x10000 IAP
+      # 注意: idf.py flash 不含配置区 (它是硬编码地址)，
+      #       必须用 merge_bin.py 生成，否则设备只能用内存默认值运行。
+      - name: Merge IAP side image (1280KB continuous)
+        run: |
+          set -e
+          python tools/merge_bin.py \
+            --build-dir build \
+            --default-cfg \
+            --flash 4MB \
+            -o build/iap_side_${{ matrix.target }}.bin
+          ls -la build/*.bin
+
+      # 生成其他常用容量的分区表 B (供用户程序工程使用)
+      - name: Generate partition tables (8MB / 16MB)
+        run: |
+          set -e
+          python tools/gen_partitions.py --flash 8MB  --bin --out-b build/partitions_app_8mb.bin
+          python tools/gen_partitions.py --flash 16MB --bin --out-b build/partitions_app_16mb.bin
+          ls -la build/partitions_app_*.bin
+
+      # 校验 DHCP 选项裁剪逻辑 (不下发网关功能的核心算法)
+      - name: Verify DHCP option stripping
+        run: |
+          set -e
+          python tools/test_dhcp_strip.py
+
+      # 校验 bootloader 字段一致性检查逻辑 (byte3 位域解析)
+      - name: Verify bootloader check logic
+        run: |
+          set -e
+          python tools/test_bootloader_check.py
+
+      # 收集产物到统一目录
+      - name: Collect artifacts
+        run: |
+          set -e
+          T="${{ matrix.target }}"
+          mkdir -p artifacts
+
+          cp build/${PROJECT_NAME}.bin                       artifacts/${PROJECT_NAME}_${T}.bin
+          cp build/${PROJECT_NAME}.elf                       artifacts/${PROJECT_NAME}_${T}.elf
+          cp build/bootloader/bootloader.bin                 artifacts/bootloader_${T}.bin
+          cp build/iap_side_${T}.bin                         artifacts/
+          cp build/partition_table/partition-table.bin       artifacts/partition-table_${T}.bin
+          cp partitions_iap.csv                              artifacts/partitions_iap.csv
+
+          # 生成产物清单与校验和
+          {
+            echo "target: ${T}"
+            echo "idf: ${IDF_VERSION}"
+            echo "commit: ${GITHUB_SHA}"
+            echo ""
+            echo "file,size,sha256"
+            for f in artifacts/*.bin; do
+              printf "%s,%s,%s\n" "$(basename $f)" "$(stat -c%s $f)" "$(sha256sum $f | cut -d' ' -f1)"
+            done
+          } > artifacts/MANIFEST_${T}.txt
+
+          cat artifacts/MANIFEST_${T}.txt
+          echo "---"
+          ls -la artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iap-firmware-${{ matrix.target }}
+          path: artifacts/
+          retention-days: 30
+          if-no-files-found: error
+
+  # ==========================================================================
+  # 内置 IAP 镜像: 用刚构建的完整镜像重新生成外置数据文件
+  # ==========================================================================
+  # 目的:
+  #   esp_iap_builtin.js 内含 6+ 个芯片的**完整 iap_side.bin** (zlib+Base64)，
+  #   用户无需上传任何文件即可一键烧录。此任务确保数据与最新构建一致。
+  #
+  # 产物:
+  #   esp_iap_builtin.js (外置数据文件) —— 作为 artifact 上传
+  #   若数据与构建不符，--check 会失败 (防止手改后忘记同步)
+  # ==========================================================================
+  embed-bootloader:
+    name: Embed IAP Images
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 下载所有芯片的构建产物
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          pattern: iap-firmware-*
+          merge-multiple: true
+
+      # 按 gen_boot_embed.py 期望的目录结构布置产物
+      #   build-root/iap_<chip>/build/bootloader/bootloader.bin
+      #   build-root/iap_<chip>/build/esp_iap.bin
+      #   build-root/iap_<chip>/build/partition_table/partition-table.bin
+      - name: Arrange build artifacts
+        run: |
+          set -e
+          mkdir -p build-root
+          for t in esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c5 esp32c6 esp32h2; do
+            boot="all-artifacts/bootloader_${t}.bin"
+            app="all-artifacts/esp_iap_${t}.bin"
+            pt="all-artifacts/partition-table_${t}.bin"
+            [ -f "$boot" ] || { echo "::warning::缺少 bootloader_${t}.bin"; continue; }
+            [ -f "$app" ]  || { echo "::warning::缺少 esp_iap_${t}.bin"; continue; }
+            [ -f "$pt" ]   || { echo "::warning::缺少 partition-table_${t}.bin"; continue; }
+
+            d="build-root/iap_${t}/build"
+            mkdir -p "$d/bootloader" "$d/partition_table"
+            cp "$boot" "$d/bootloader/bootloader.bin"
+            cp "$app"  "$d/esp_iap.bin"
+            cp "$pt"   "$d/partition_table/partition-table.bin"
+          done
+          echo "--- 已布置 ---"
+          find build-root -name '*.bin' | sort
+
+      # 重新生成索引 + 分芯片数据文件
+      - name: Regenerate builtin images
+        run: |
+          python tools/gen_boot_embed.py --build-root build-root \
+            --out-js esp_iap_builtin.js --out-dir assets
+          echo "--- 索引 ---"
+          ls -lh esp_iap_builtin.js
+          echo "--- 分芯片数据 ---"
+          ls -lh assets/iap_img_*.js
+
+      # 校验 HTML 中的引用块存在且指向惰性加载
+      - name: Verify HTML reference
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          html = pathlib.Path("esp_iap_tool.html").read_text(encoding="utf-8")
+          checks = [
+              ("索引 script 引用", 'src="esp_iap_builtin.js"'),
+              ("惰性加载函数", "loadChipDataScript"),
+              ("数据文件名模板", '"assets/iap_img_" + key + ".js"'),
+              ("解压函数", "DecompressionStream"),
+          ]
+          ok = True
+          for name, needle in checks:
+              found = needle in html
+              print(("  OK   " if found else "  FAIL ") + name)
+              ok = ok and found
+          if not ok:
+              sys.exit(1)
+          print("HTML 引用校验通过")
+          PY
+
+      - name: Upload builtin images
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-editor-builtin
+          path: |
+            esp_iap_tool.html
+            esp_iap_builtin.js
+            assets/iap_img_*.js
+          retention-days: 30
+
+  # ==========================================================================
+  # 汇总: 所有目标构建结果
+  # ==========================================================================
+  summary:
+    name: Build Summary
+    needs: [prepare, build, embed-bootloader]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Write summary
+        run: |
+          echo "## 构建结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| ESP-IDF | \`${IDF_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 提交 | \`${GITHUB_SHA:0:8}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 目标 | ${{ needs.prepare.outputs.targets }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ 所有芯片构建成功" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ 部分芯片构建失败，请查看上方任务日志" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          if [ "${{ needs.embed-bootloader.result }}" == "success" ]; then
+            echo "✅ 内置 bootloader 已同步到 HTML" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ 内置 bootloader 同步失败" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+  # ==========================================================================
+  # 发布: 打 tag 或手动触发时创建 Release
+  # ==========================================================================
+  release:
+    name: Create Release
+    needs: [build, summary, embed-bootloader]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 下载内置镜像数据 (含 esp_iap_tool.html + esp_iap_builtin.js)
+      - name: Download builtin images
+        uses: actions/download-artifact@v4
+        with:
+          name: web-editor-builtin
+          path: web-editor
+        continue-on-error: true
+
+      # 下载所有芯片的构建产物
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          pattern: iap-firmware-*
+          merge-multiple: true
+
+      # 打包工具与文档
+      - name: Assemble release
+        run: |
+          set -e
+          mkdir -p release
+          cp all-artifacts/*.bin release/ 2>/dev/null || true
+          cp all-artifacts/*.txt release/ 2>/dev/null || true
+
+          # 配套工具与文档
+          cp tools/gen_factory_cfg.py    release/
+          cp tools/gen_partitions.py     release/
+          cp tools/gen_boot_embed.py     release/
+          cp tools/merge_bin.py          release/
+          cp tools/merge_user_app.py     release/
+          cp tools/iap_xmodem_send.py    release/
+          cp tools/serve_editor.py       release/
+          cp tools/verify_html_editor.py release/
+          cp tools/test_dhcp_strip.py   release/
+          cp tools/test_dhcp_strip.py    release/
+          cp tools/test_bootloader_check.py release/
+          cp tools/test_crc.py           release/
+          cp README.md                   release/
+          cp partitions_iap.csv          release/
+
+          # 浏览器工具 + 内置镜像数据 (来自 embed-bootloader 任务)
+          if [ -f web-editor/esp_iap_tool.html ]; then
+            cp web-editor/esp_iap_tool.html release/
+          else
+            cp esp_iap_tool.html release/
+          fi
+          if [ -f web-editor/esp_iap_builtin.js ]; then
+            cp web-editor/esp_iap_builtin.js release/
+            mkdir -p release/assets
+            cp web-editor/assets/iap_img_*.js release/assets/ 2>/dev/null \
+              || cp web-editor/iap_img_*.js release/assets/ 2>/dev/null || true
+          else
+            echo "::warning::未找到内置镜像数据，浏览器工具将只能手动选择文件"
+          fi
+          # 合并所有芯片的校验和
+          cd release
+          sha256sum *.bin > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          echo "---"
+          ls -la
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ESP IAP ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release/*
+          body: |
+            ## ESP IAP ${{ github.ref_name }}
+
+            多芯片 IAP 固件，支持通过 **UART / I2C / WiFi** 烧录用户程序。
+
+            ### 支持芯片
+
+            | 芯片 | 固件 | WiFi | I2C 从机 |
+            |------|------|:----:|:--------:|
+            | ESP32    | `iap_side_esp32.bin`   | ✅ | ✅ |
+            | ESP32-S2 | `iap_side_esp32s2.bin` | ✅ | ✅ |
+            | ESP32-S3 | `iap_side_esp32s3.bin` | ✅ | ✅ |
+            | ESP32-C3 | `iap_side_esp32c3.bin` | ✅ | ✅ |
+            | ESP32-C5 | `iap_side_esp32c5.bin` | ✅ | ✅ |
+            | ESP32-C6 | `iap_side_esp32c6.bin` | ✅ | ✅ |
+            | ESP32-H2 | `iap_side_esp32h2.bin` | ❌ | ✅ |
+
+            > ⚠️ **ESP32-C2 不支持** —— 无 RTC FAST RAM，无法用 RTC RAM 传递启动参数。
+
+            ### 烧录方式
+
+            **2 个文件，顺序无关**
+
+            ```bash
+            esptool.py --chip <芯片> write_flash \
+              0x0      iap_side_<芯片>.bin \
+              0x140000 user_<芯片>.bin
+            ```
+
+            | 文件 | 地址 | 大小 | 内容 |
+            |------|------|------|------|
+            | `iap_side_<芯片>.bin` | `0x0` | 1280 KB | bootloader + 配置区 + 分区表 A + IAP 程序 |
+            | `user_<芯片>.bin` | `0x140000` | ~216 KB | 分区表 B + 应用镜像（v6 已合并） |
+
+            固件已包含 **默认出厂配置区**，烧录后设备启动即读取该配置
+            （日志显示 `已加载配置 (槽 0, seq=1)`）。
+
+            > **v6 变更**：用户程序打包为**从 `0x140000` 开始的单一文件**
+            > （分区表 B + 0xFF 填充 + 应用镜像），IAP 会**整段写入**该地址，
+            > 与 esptool 语义一致。用 `build_user_app.py` 或
+            > `tools/merge_user_app.py` 生成。
+
+            > **安全保证**：分区表与 flash 容量不匹配时 bootloader 会拒绝启动，
+            > 设备停留在 ROM 下载模式，重烧正确分区表即可恢复，**不会变砖**。
+
+            **浏览器烧录**（免安装，推荐）
+
+            下载 `esp_iap_tool.html` **和** `esp_iap_builtin.js` + `assets/iap_img_*.js`
+            （放同一目录），用 Chrome / Edge 打开即可：
+            - **内置完整镜像**：连接设备后自动识别芯片，一键烧录（含 IAP 程序）
+            - 依次加载两个文件（`iap_side.bin` / `user.bin`），自动组装
+            - 在线编辑出厂配置
+            - 通过 Web Serial 直接烧录
+            - 「分区表工具」：从设备读取 flash 容量 → 生成并导出分区表 A/B
+            - 读取设备 Flash 备份/克隆
+
+            > **惰性加载**：默认只加载索引 `esp_iap_builtin.js`（1.4 KB），
+            > 首次需要某芯片时才拉取对应的 `assets/iap_img_<芯片>.js`（~800 KB）。
+            > 所有文件**必须与 HTML 同目录**；缺失时仍可手动选择文件。
+
+            ### 配套工具
+
+            | 工具 | 说明 |
+            |------|------|
+            | `esp_iap_tool.html` | 浏览器配置与烧录工具（纯前端，含分区表工具） |
+            | `esp_iap_builtin.js` | 内置镜像**索引**（1.4 KB，惰性加载入口） |
+            | `assets/iap_img_<芯片>.js` | 各芯片完整镜像数据（按需加载） |
+            | `gen_boot_embed.py` | 生成索引与分芯片数据文件 |
+            | `gen_factory_cfg.py` | 生成出厂配置镜像 |
+            | `gen_partitions.py` | **按 flash 容量生成分区表** |
+            | `merge_bin.py` | 合并为烧录镜像（不含分区表） |
+            | `merge_user_app.py` | **合并分区表 B + 应用镜像**（v6，输出从 0x140000 开始） |
+            | `iap_xmodem_send.py` | 命令行 XMODEM 发送 |
+            | `serve_editor.py` | 本地预览/校验网页工具 |
+            | `test_crc.py` | CRC 算法一致性验证 |
+            | `test_dhcp_strip.py` | DHCP 选项裁剪逻辑验证（不下发网关） |
+            | `test_bootloader_check.py` | bootloader 字段一致性检查逻辑验证 |
+
+            ### 校验
+
+            每个芯片附 `MANIFEST_<芯片>.txt`（含文件大小与 SHA256），
+            全部产物校验和见 `SHA256SUMS.txt`。
+
+            详见 `README.md`。

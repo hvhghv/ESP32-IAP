@@ -1,0 +1,124 @@
+/*
+ * ESP IAP - 终端接口
+ *
+ * 终端引擎与传输后端解耦:
+ *   - 引擎 (本文件实现): 行编辑、命令解析、XMODEM 调度
+ *   - 后端 (iap_uart.c / iap_usb.c): 提供读/写字节的原语
+ *
+ * 这样 UART 与 USB 串口可共用同一套命令与交互逻辑。
+ */
+
+#pragma once
+
+#include <stdint.h>
+#include <stddef.h>
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/** 终端命令行最大长度 */
+#define IAP_TERM_LINE_MAX     256
+
+/**
+ * @brief 终端后端接口
+ *
+ * 每种物理通道 (UART / USB) 实现这组原语，终端引擎据此收发。
+ */
+typedef struct {
+    const char *name;       /*!< 后端名称 (用于日志) */
+
+    /** 读取至多 len 字节，返回实际读取数 (0 表示超时无数据) */
+    int (*read)(uint8_t *buf, size_t len, uint32_t timeout_ms);
+
+    /** 写入 len 字节，返回实际写入数 */
+    int (*write)(const uint8_t *buf, size_t len);
+
+    /** 后端是否就绪 (未就绪时引擎不启动) */
+    bool (*ready)(void);
+} iap_term_backend_t;
+
+/* -------------------------------------------------------------------------- */
+/* 后端注册                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief 启动 UART 终端
+ *
+ * 从配置区读取端口/引脚/波特率，安装驱动并把 UART 注册为终端后端。
+ *
+ * @return ESP_OK 成功
+ */
+esp_err_t iap_uart_start(void);
+
+/**
+ * @brief 启动 USB 串口终端 (USB-Serial-JTAG CDC)
+ *
+ * 仅支持 USB 的芯片可用；不支持的芯片直接返回 ESP_OK (不启动)。
+ * 无波特率概念 (由主机决定)，默认 115200 仅为日志显示。
+ *
+ * @return ESP_OK 成功
+ */
+esp_err_t iap_usb_start(void);
+
+/**
+ * @brief 仅安装 USB-Serial-JTAG 驱动 (不挂终端)
+ *
+ * 供**等待触发窗口**提前调用: 窗口期间需要读 USB 输入来判断是否
+ * 收到 "iap" 进入命令，但此时终端尚未启动。
+ *
+ * 幂等: 重复调用安全 (已安装则直接返回 ESP_OK)。
+ * 未使能 USB (IAP_CFG_FLAG_USB_ENABLE) 或芯片不支持时返回 ESP_OK 但不安装。
+ *
+ * @return ESP_OK 成功
+ */
+esp_err_t iap_usb_prepare(void);
+
+/**
+ * @brief USB 驱动是否已就绪 (可读)
+ */
+bool iap_usb_ready(void);
+
+/**
+ * @brief 从 USB 读取字节 (非阻塞)
+ *
+ * @param buf 输出缓冲区
+ * @param len 期望长度
+ * @return 实际读到的字节数 (0 = 无数据/未就绪)
+ */
+int iap_usb_read(uint8_t *buf, size_t len);
+
+/* -------------------------------------------------------------------------- */
+/* 终端引擎 (供各后端调用)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief 向所有已注册的后端输出字符串
+ *
+ * 用于命令回显与日志，UART 与 USB 会同时收到。
+ */
+void iap_term_write(const char *s);
+
+/**
+ * @brief 格式化输出到所有已注册的后端
+ */
+void iap_term_printf(const char *fmt, ...);
+
+/**
+ * @brief 注册一个终端后端并启动对应的读取任务
+ *
+ * 每个后端独立一个任务，共享同一套命令表与行缓冲 (各自独立行缓冲)。
+ *
+ * @param backend 后端接口 (须为静态存储)
+ * @param task_name 任务名
+ * @return ESP_OK 成功
+ */
+esp_err_t iap_term_attach(const iap_term_backend_t *backend, const char *task_name);
+
+/** 当前是否有任一后端就绪 */
+bool iap_term_any_ready(void);
+
+#ifdef __cplusplus
+}
+#endif

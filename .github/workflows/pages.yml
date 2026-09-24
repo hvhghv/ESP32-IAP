@@ -1,0 +1,254 @@
+name: Build & Deploy Web Editor
+
+# 构建并发布浏览器配置编辑器 (esp_iap_tool.html)
+#
+# 触发方式:
+#   - push 到 main / master 分支 (自动部署到 GitHub Pages)
+#   - 提交 PR (仅构建校验，不部署)
+#   - 手动触发
+#
+# 产物:
+#   - GitHub Pages 站点 (可直接在线使用编辑器)
+#   - 构建好的 HTML 文件 (Artifact，可下载离线使用)
+#
+# 在线地址 (部署后):
+#   https://<owner>.github.io/<repo>/esp_iap_tool.html
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'esp_iap_tool.html'
+      - 'esp_iap_builtin.js'
+      - 'tools/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'esp_iap_tool.html'
+      - 'esp_iap_builtin.js'
+      - 'tools/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# 部署 Pages 所需权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一分支的重复触发取消旧任务
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EDITOR: esp_iap_tool.html
+
+jobs:
+  # ==========================================================================
+  # 校验: 检查 HTML 完整性与 JS 语法
+  # ==========================================================================
+  verify:
+    name: Verify Editor
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 检查 HTML 文件存在且非空
+      - name: Check file exists
+        run: |
+          if [ ! -f "$EDITOR" ]; then
+            echo "::error::找不到 $EDITOR"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$EDITOR")
+          echo "文件大小: $SIZE 字节"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::文件过小，可能损坏"
+            exit 1
+          fi
+
+      # 提取 <script type="module"> 并用 node 做语法检查
+      - name: Extract and check JS syntax
+        run: |
+          python - <<'PY'
+          import re, sys, pathlib
+          html = pathlib.Path("esp_iap_tool.html").read_text(encoding="utf-8")
+          m = re.search(r'<script type="module">(.*?)</script>', html, re.S)
+          if not m:
+              print("::error::未找到 <script type=\"module\"> 块")
+              sys.exit(1)
+          js = m.group(1)
+          pathlib.Path("_check.mjs").write_text(js, encoding="utf-8")
+          print(f"提取 JS: {js.count(chr(10))} 行")
+          PY
+          node --check _check.mjs
+          echo "JS 语法检查通过"
+
+      # 校验 HTML 中的常量与 C 头文件一致（交叉验证）
+      - name: Cross-check with Python tools
+        run: |
+          python tools/verify_html_editor.py
+
+      # 校验内置 bootloader 数据块完整性（Base64 可解码 + 结构正确）
+      - name: Check embedded bootloaders
+        run: |
+          python - <<'PY'
+          import base64, pathlib, re, sys
+          html = pathlib.Path("esp_iap_tool.html").read_text(encoding="utf-8")
+          mb = html.find("/* ==== BEGIN BUILTIN BOOTLOADERS")
+          me = html.find("/* ==== END BUILTIN BOOTLOADERS ==== */")
+          if mb < 0 or me < 0:
+              print("::error::未找到内置 bootloader 数据块")
+              sys.exit(1)
+          if html.count("BEGIN BUILTIN BOOTLOADERS") != 1:
+              print("::error::内置 bootloader 数据块重复")
+              sys.exit(1)
+          block = html[mb:me]
+          targets = ["esp32","esp32s2","esp32s3","esp32c2","esp32c3","esp32c5","esp32c6","esp32h2"]
+          ok = 0
+          for t in targets:
+              m = re.search(r'\b' + t + r':\s*\{\s*size:\s*(\d+),\s*sha256:\s*"([0-9a-f]+)",\s*data:\s*"([^"]+)"', block)
+              if not m:
+                  print(f"::error::缺少 {t} 的内置 bootloader")
+                  sys.exit(1)
+              size = int(m.group(1)); sha = m.group(2); data = m.group(3)
+              raw = base64.b64decode(data)
+              if len(raw) != size:
+                  print(f"::error::{t} 解码大小不符: {len(raw)} != {size}")
+                  sys.exit(1)
+              if raw[0] != 0xE9:
+                  print(f"::error::{t} 不是有效 ESP 镜像 (首字节 0x{raw[0]:02x})")
+                  sys.exit(1)
+              import hashlib
+              if hashlib.sha256(raw).hexdigest() != sha:
+                  print(f"::error::{t} SHA256 不符")
+                  sys.exit(1)
+              ok += 1
+          print(f"内置 bootloader 校验通过 ({ok} 个芯片)")
+          PY
+
+      # 检查关键元素是否齐全
+      - name: Check required elements
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          html = pathlib.Path("esp_iap_tool.html").read_text(encoding="utf-8")
+          required = [
+              'id="fileInput"', 'id="btnConnect"', 'id="btnFlash"',
+              'id="btnDump"', 'id="btnDumpEdit"', 'id="burnTargetBar"',
+              'id="appMethod"', 'id="dumpScope"',
+              'CFG_MAGIC', 'USER_APP_ADDR', 'xmodemSend',
+              'id="bootModeBuiltin"', 'id="bootModeManual"',
+              'id="btnBootExport"', 'BUILTIN_BOOTLOADERS',
+              'id="bootChipSelect"',
+          ]
+          missing = [r for r in required if r not in html]
+          if missing:
+              print("::error::缺少关键元素: " + ", ".join(missing))
+              sys.exit(1)
+          print(f"关键元素检查通过 ({len(required)} 项)")
+          PY
+
+      - name: Upload verified HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-editor
+          path: ${{ env.EDITOR }}
+          retention-days: 30
+
+  # ==========================================================================
+  # 部署: 发布到 GitHub Pages (仅 push 到主分支时)
+  # ==========================================================================
+  deploy:
+    name: Deploy to Pages
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 组装站点目录
+      - name: Prepare site
+        run: |
+          mkdir -p _site
+          cp esp_iap_tool.html _site/index.html
+          cp esp_iap_tool.html _site/esp_iap_tool.html
+          # 内置镜像索引 + 分芯片数据 (惰性加载: assets/ 子目录)
+          if [ -f esp_iap_builtin.js ]; then
+            cp esp_iap_builtin.js _site/esp_iap_builtin.js
+            mkdir -p _site/assets
+            cp assets/iap_img_*.js _site/assets/ 2>/dev/null \
+              || cp iap_img_*.js _site/assets/ 2>/dev/null || true
+          else
+            echo "::warning::未找到 esp_iap_builtin.js, 页面将只能手动选择文件"
+          fi
+          cp README.md _site/README.md
+          # 附带工具脚本，方便用户下载
+          mkdir -p _site/tools
+          cp tools/*.py _site/tools/
+          cat > _site/.nojekyll <<'EOF'
+          EOF
+          ls -la _site/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ==========================================================================
+  # 汇总
+  # ==========================================================================
+  summary:
+    name: Summary
+    needs: [verify, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Write summary
+        run: |
+          echo "## Web 编辑器构建结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 结果 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 校验 | ${{ needs.verify.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 部署 | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.verify.result }}" != "success" ]; then
+            echo "❌ 校验失败，请查看上方日志" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ 已部署到 GitHub Pages" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "ℹ️ PR 仅校验，不部署" >> $GITHUB_STEP_SUMMARY
+          fi

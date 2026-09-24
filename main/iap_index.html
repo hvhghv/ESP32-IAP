@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP IAP 控制台</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#161a22; --panel2:#1a1f2b; --border:#232936;
+  --text:#e6e6e6; --dim:#9aa4b2; --accent:#2a6df4; --accent-h:#3d7ef8;
+  --ok:#4ade80; --err:#f87171; --warn:#fbbf24;
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;margin:0;
+  background:var(--bg);color:var(--text);line-height:1.6}
+.wrap{max-width:960px;margin:0 auto;padding:20px}
+h1{font-size:22px;border-bottom:2px solid var(--accent);padding-bottom:8px}
+h2{font-size:15px;color:#8ab4ff;margin:0 0 12px}
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+td,th{border:1px solid #2a2f3a;padding:6px 10px;text-align:left}
+th{background:var(--panel2);width:38%;font-weight:600}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+  padding:14px 18px;margin-top:12px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;
+  padding:8px 16px;font-size:14px;cursor:pointer;margin:4px 6px 4px 0}
+button:hover{background:var(--accent-h)}
+button.sec{background:var(--panel2);border:1px solid var(--border);color:var(--text)}
+button.sec:hover{background:#222836;color:var(--text)}
+button.danger{background:#c0392b}
+button.danger:hover{background:#e04b3a}
+button:disabled{opacity:.45;cursor:not-allowed}
+input[type=file]{font-size:13px;color:#ccc}
+input[type=text],input[type=number],select,textarea{
+  background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  border-radius:5px;padding:6px 9px;font-size:13px;width:100%;
+  font-family:ui-monospace,Consolas,monospace}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+select{font-family:inherit}
+textarea{resize:vertical;min-height:52px}
+#log{background:#0a0c10;border:1px solid var(--border);border-radius:6px;
+  padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
+  height:150px;overflow:auto;white-space:pre-wrap;margin-top:10px}
+.ok{color:var(--ok)}.err{color:var(--err)}.dim{color:var(--dim)}
+.row{display:grid;grid-template-columns:150px 1fr;gap:8px 14px;
+  align-items:center;margin-bottom:9px}
+.row>label{color:var(--dim);font-size:13px}
+.hint{color:var(--dim);font-size:12px;margin-top:2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:720px){.grid2{grid-template-columns:1fr}}
+/* 功能开关 */
+.flags{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.flag{display:flex;align-items:center;gap:8px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:13px}
+.flag.on{border-color:rgba(74,158,255,.55)}
+.flag.on>.fname{color:var(--accent)}
+.flag>.fname{flex:1;white-space:nowrap}
+.flag select{width:auto;min-width:82px;padding:3px 7px;font-size:12px}
+.flag .bit{color:var(--dim);font-size:11px;font-family:ui-monospace,monospace}
+/* OTA 槽表 */
+.slotlist{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+.slotlist th{background:var(--panel2);width:auto;font-size:12px;padding:5px 8px}
+.slotlist td{padding:4px 6px}
+.slotlist tr.active td{background:rgba(42,109,244,.12)}
+.slotlist input[type=text]{padding:4px 7px;font-size:12px}
+.slotlist .sl-idx{width:38px;text-align:center;color:var(--dim)}
+.slotlist .sl-pick{width:52px;text-align:center}
+.slotlist input[type=radio]{width:auto}
+.slotbar{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.slotbar .t{flex:1;font-size:13px;color:var(--dim)}
+.slotbar button{margin:0;padding:5px 11px;font-size:12px;background:var(--panel2);
+  border:1px solid var(--border);color:var(--text)}
+.slotbar button:hover{background:#222836;color:var(--text)}
+.warnbox{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);
+  border-radius:6px;padding:9px 12px;font-size:12.5px;color:#e8d9a8;margin-bottom:10px}
+.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px}
+.badge.ok{background:rgba(74,222,128,.15);color:var(--ok)}
+.badge.err{background:rgba(248,113,113,.15);color:var(--err)}
+</style>
+</head>
+<body><div class="wrap">
+<h1>ESP IAP 控制台</h1>
+
+<div class="card"><h2>系统信息</h2><table id="sysinfo"></table></div>
+<div class="card"><h2>用户程序</h2><table id="appinfo"></table></div>
+
+<div class="card"><h2>固件上传</h2>
+<p class="hint">文件需为从 0x140000 开始的完整镜像（含分区表 B，用 build_user_app.py 生成）</p>
+<div class="row">
+  <label>写入地址</label>
+  <div><input type="text" id="upAddr" placeholder="0x140000（默认）">
+  <div class="hint">留空 = 0x140000。须 4KB 对齐且 &ge; 0x140000</div></div>
+</div>
+<div class="row">
+  <label>写入长度</label>
+  <div><input type="text" id="upLen" placeholder="留空 = 文件长度">
+  <div class="hint">留空 = 写入整个文件；填数字则只写前 N 字节</div></div>
+</div>
+<input type="file" id="fw" accept=".bin">
+<button onclick="upload()">上传并烧录</button>
+<div id="log"></div>
+</div>
+
+<div class="card"><h2>固件下载</h2>
+<div class="row">
+  <label>读取地址</label>
+  <div><input type="text" id="dlAddr" placeholder="0x140000（默认）">
+  <div class="hint">留空 = 0x140000。须 &ge; 0x140000（固定区不可下载）</div></div>
+</div>
+<div class="row">
+  <label>读取长度</label>
+  <div><input type="text" id="dlLen" placeholder="留空 = 到 flash 末尾">
+  <div class="hint">留空 = 从地址读到 flash 末尾（按 flash 容量自动计算）</div></div>
+</div>
+<button onclick="download()">下载</button>
+<div class="hint" id="dlHint"></div>
+</div>
+
+<div class="card"><h2>操作</h2>
+<button onclick="act('/api/verify')">校验程序</button>
+<button onclick="act('/api/erase')" class="danger">擦除程序区</button>
+<button onclick="act('/api/boot')">启动用户程序</button>
+<button onclick="act('/api/reboot')" class="danger">重启设备</button>
+</div>
+
+<!-- ==================== 配置编辑 ==================== -->
+<div class="card">
+  <h2>配置区编辑</h2>
+  <div class="hint" style="margin-bottom:10px">
+    读取设备配置区 → 修改 → 写回（仅写 8KB 配置区，不影响 IAP 程序与用户程序）。
+    部分参数（WiFi / UART）需重启后生效。
+  </div>
+  <button onclick="cfgLoad()">读取配置</button>
+  <button onclick="cfgSave(false)" id="cfgSaveBtn" disabled>写回设备</button>
+  <button onclick="cfgSave(true)" id="cfgSaveRebootBtn" disabled>写回并重启</button>
+  <button onclick="cfgReset()" class="sec" id="cfgResetBtn" disabled>恢复默认值</button>
+  <div class="hint" id="cfgHint"></div>
+</div>
+
+<div id="cfgEditor" style="display:none">
+
+  <!-- 功能开关 -->
+  <div class="card">
+    <h2>功能开关</h2>
+    <div class="flags" id="flagsBox"></div>
+    <div class="row" style="margin-top:10px">
+      <label>flags 原始值</label>
+      <div style="display:flex;gap:10px;align-items:center">
+        <input type="text" id="cfgFlags" readonly style="max-width:150px">
+        <span class="hint" id="cfgFlagsDesc"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 启动等待 -->
+  <div class="card">
+    <h2>启动等待</h2>
+    <div class="row">
+      <label>等待秒数</label>
+      <div>
+        <input type="number" id="cfgWait" min="0" max="300">
+        <div class="hint">进入 IAP 后等待触发源的秒数，0 表示不等待（上限 300）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WiFi / UART -->
+  <div class="grid2">
+    <div class="card">
+      <h2>WiFi 热点</h2>
+      <div class="row">
+        <label>SSID</label>
+        <div><input type="text" id="cfgSsid" maxlength="31">
+        <div class="hint">最长 31 字节</div></div>
+      </div>
+      <div class="row">
+        <label>密码</label>
+        <div><input type="text" id="cfgPass" maxlength="63">
+        <div class="hint">8~63 字节；留空表示开放网络</div></div>
+      </div>
+      <div class="row">
+        <label>信道</label>
+        <input type="number" id="cfgChannel" min="1" max="13">
+      </div>
+      <div class="row">
+        <label>AP IP 地址</label>
+        <input type="text" id="cfgIp" placeholder="192.168.4.1">
+      </div>
+      <div class="row">
+        <label>子网掩码</label>
+        <input type="text" id="cfgMask" placeholder="255.255.255.0">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>UART 终端</h2>
+      <div class="row">
+        <label>端口号</label>
+        <select id="cfgUartPort">
+          <option value="0">UART0（默认日志口）</option>
+          <option value="1">UART1</option>
+          <option value="2">UART2</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>TX 引脚</label>
+        <div><input type="text" id="cfgUartTx" placeholder="默认">
+        <div class="hint">留空或 255 = 用该端口默认引脚</div></div>
+      </div>
+      <div class="row">
+        <label>RX 引脚</label>
+        <div><input type="text" id="cfgUartRx" placeholder="默认">
+        <div class="hint">留空或 255 = 用该端口默认引脚</div></div>
+      </div>
+      <div class="row">
+        <label>波特率</label>
+        <div><input type="number" id="cfgBaud" min="9600" max="3000000" step="100">
+        <div class="hint">常用: 115200 / 921600 / 1500000</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- I2C / 触发引脚 -->
+  <div class="grid2">
+    <div class="card">
+      <h2>I2C 从机</h2>
+      <div class="row">
+        <label>SCL 引脚</label>
+        <input type="number" id="cfgScl" min="0" max="48">
+      </div>
+      <div class="row">
+        <label>SDA 引脚</label>
+        <input type="number" id="cfgSda" min="0" max="48">
+      </div>
+      <div class="row">
+        <label>从机地址</label>
+        <div><input type="text" id="cfgI2cAddr" placeholder="0x42">
+        <div class="hint">7 位地址，0x08~0x77</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>触发引脚</h2>
+      <div class="row">
+        <label>GPIO 引脚</label>
+        <div><input type="number" id="cfgTrig" min="0" max="255">
+        <div class="hint">0 = GPIO0 (BOOT 键)；255 (0xFF) 表示未配置</div></div>
+      </div>
+      <div class="row">
+        <label>触发方式</label>
+        <div><select id="cfgTrigLevel">
+          <option value="0">上拉，低电平触发</option>
+          <option value="1">下拉，高电平触发</option>
+        </select>
+        <div class="hint">引脚常态为高，接地即触发进入 IAP</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP 启动槽 -->
+  <div class="card">
+    <h2>APP 启动槽</h2>
+    <div class="warnbox">
+      IAP 启动时按<b>启动槽序号</b>决定加载哪个 APP 分区。槽的<b>加载地址 / 大小</b>
+      直接保存在配置区里，由你手动填写 —— IAP <b>不解析任何分区表</b>。
+    </div>
+    <div class="slotbar">
+      <span class="t">槽位列表</span>
+      <button onclick="slotAdd()">＋ 添加槽</button>
+      <button onclick="slotDel()">－ 删除槽</button>
+    </div>
+    <input type="hidden" id="cfgSlotCount" value="1">
+    <input type="hidden" id="cfgActiveSlot" value="0">
+    <table class="slotlist" id="slotTable"></table>
+    <div class="hint" id="slotSummary" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:12px">
+      <label>槽选择 GPIO</label>
+      <div><input type="number" id="cfgOtaGpio" min="0" max="255" placeholder="255（禁用）">
+      <div class="hint">可选。按 <code>电平 % 槽数</code> 选启动槽；255 表示关闭</div></div>
+    </div>
+  </div>
+
+  <!-- 启动参数 -->
+  <div class="card">
+    <h2>启动参数</h2>
+    <textarea id="cfgBootParam" maxlength="255"></textarea>
+    <div class="hint">IAP 写入、用户程序读取。建议格式 <code>key=value;key=value</code>，最长 255 字节。</div>
+  </div>
+
+</div>
+</div>
+
+<script>
+"use strict";
+/* ======================= 常量 (与固件 iap_common.h 一致) ======================= */
+const FLAGS = [
+  { bit: 0,  name: "强制下载模式", desc: "置位则启动时直接进入 IAP" },
+  { bit: 1,  name: "WiFi AP",      desc: "使能 WiFi 热点" },
+  { bit: 2,  name: "I2C 从机",     desc: "使能 I2C 从机协议" },
+  { bit: 3,  name: "UART 终端",    desc: "使能串口终端" },
+  { bit: 4,  name: "启动校验",     desc: "允许启动用户程序（合法性由 bootloader 自校验）" },
+  { bit: 5,  name: "GPIO 触发",    desc: "等待期间引脚为有效电平则进入 IAP" },
+  { bit: 6,  name: "I2C 触发",     desc: "等待期间收到 I2C 命令则进入 IAP" },
+  { bit: 7,  name: "UART 触发",    desc: "等待期间收到 UART 命令则进入 IAP" },
+  { bit: 8,  name: "WiFi 触发",    desc: "等待期间有客户端接入则进入 IAP" },
+  { bit: 9,  name: "USB 串口",     desc: "使能 USB 终端与烧录（仅 C3/C6/H2/S3）" },
+  { bit: 10, name: "USB 触发",     desc: "等待期间收到 USB 命令则进入 IAP" },
+];
+const OTA_SLOT_MAX     = 8;
+const UART_PIN_DEF     = 0xFF;
+const FIXED_REGION_END = 0x140000;
+
+/* ======================= 工具函数 ======================= */
+const $ = id => document.getElementById(id);
+const hex32 = v => "0x" + (v >>> 0).toString(16).padStart(8, "0").toUpperCase();
+const hex8  = v => "0x" + (v & 0xFF).toString(16).padStart(2, "0").toUpperCase();
+function log(m, c){ const l = $("log"); l.innerHTML += '<span class="' + (c||'') + '">' + m + '</span>\n'; l.scrollTop = l.scrollHeight; }
+function rows(obj){ let h=''; for(const k in obj){ h += '<tr><th>'+k+'</th><td>'+obj[k]+'</td></tr>'; } return h; }
+function parseNum(s){ s = String(s||"").trim(); if(!s) return 0; return /^0x/i.test(s) ? parseInt(s,16) : parseInt(s,10); }
+function parsePinOr(s, def){ s = String(s||"").trim(); if(!s) return def; const v = parseNum(s); return isNaN(v) ? def : (v & 0xFF); }
+
+/* ======================= 系统信息 / 用户程序 ======================= */
+function load(){
+  fetch('/api/info').then(r=>r.json()).then(d=>{ $("sysinfo").innerHTML = rows(d); }).catch(()=>{});
+  fetch('/api/app').then(r=>r.json()).then(d=>{ $("appinfo").innerHTML = rows(d); }).catch(()=>{});
+}
+function upload(){
+  const f = $("fw").files[0];
+  if(!f){ log('请先选择文件','err'); return; }
+
+  /* 组装查询参数: 留空则交由固件取默认值 (addr=0x140000, length=文件长度) */
+  const q = [];
+  const addr = $("upAddr").value.trim();
+  const len  = $("upLen").value.trim();
+  if(addr){ q.push("addr=" + encodeURIComponent(addr)); }
+  if(len){  q.push("length=" + encodeURIComponent(len)); }
+  const url = '/api/upload' + (q.length ? ('?' + q.join('&')) : '');
+
+  log('开始上传 ' + f.name + ' (' + f.size + ' 字节) → ' +
+      (addr || '0x140000') + '，长度 ' + (len || f.size) + ' ...');
+  fetch(url, {method:'POST', body:f}).then(r=>r.text()).then(t=>{
+    log(t, r.ok?'ok':'err'); load();
+  }).catch(e=>log('上传失败: '+e,'err'));
+}
+
+function download(){
+  const q = [];
+  const addr = $("dlAddr").value.trim();
+  const len  = $("dlLen").value.trim();
+  if(addr){ q.push("addr=" + encodeURIComponent(addr)); }
+  if(len){  q.push("length=" + encodeURIComponent(len)); }
+  const url = '/api/download' + (q.length ? ('?' + q.join('&')) : '');
+
+  $("dlHint").textContent = "下载中...";
+  log('开始下载 ' + (addr || '0x140000') + '，长度 ' + (len || '到 flash 末尾') + ' ...');
+
+  fetch(url).then(r => {
+    if(!r.ok) return r.text().then(t => { throw new Error(t); });
+    const disp = r.headers.get("Content-Disposition") || "";
+    let name = "flash.bin";
+    const m = disp.match(/filename="?([^"]+)"?/);
+    if(m) name = m[1];
+    return r.blob().then(b => ({ name, b }));
+  }).then(({name,b}) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    $("dlHint").textContent = "已下载 " + name + " (" + b.size + " 字节)";
+    log('下载完成: ' + name + ' (' + b.size + ' 字节)', 'ok');
+  }).catch(e => {
+    $("dlHint").textContent = "下载失败: " + e.message;
+    log('下载失败: ' + e.message, 'err');
+  });
+}
+function act(u){
+  fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{ log(t, r.ok?'ok':'err'); load(); })
+    .catch(e=>log('失败: '+e,'err'));
+}
+
+/* ======================= 功能开关 ======================= */
+function buildFlagsBox(){
+  const box = $("flagsBox");
+  box.innerHTML = FLAGS.map(f => `
+    <div class="flag" title="${f.desc}">
+      <span class="fname">${f.name}</span>
+      <select data-bit="${f.bit}" id="flag_${f.bit}">
+        <option value="0">关闭</option><option value="1">开启</option>
+      </select>
+      <span class="bit">bit${f.bit}</span>
+    </div>`).join("");
+  box.querySelectorAll("select").forEach(sel => sel.addEventListener("change", updateFlagsField));
+}
+function readFlags(){
+  let v = 0;
+  $("flagsBox").querySelectorAll("select").forEach(sel => {
+    if(sel.value === "1") v |= (1 << parseInt(sel.dataset.bit,10));
+  });
+  return v >>> 0;
+}
+function setFlags(v){
+  v = v >>> 0;
+  $("flagsBox").querySelectorAll("select").forEach(sel => {
+    sel.value = (v & (1 << parseInt(sel.dataset.bit,10))) ? "1" : "0";
+  });
+  updateFlagsField();
+}
+function updateFlagsField(){
+  const v = readFlags();
+  $("flagsBox").querySelectorAll("select").forEach(sel => {
+    sel.closest(".flag").classList.toggle("on", sel.value === "1");
+  });
+  $("cfgFlags").value = hex32(v);
+  const active = FLAGS.filter(f => v & (1 << f.bit)).map(f => f.name);
+  $("cfgFlagsDesc").textContent = active.length ? "= " + active.join(", ") : "(无)";
+}
+
+/* ======================= OTA 槽表 ======================= */
+let SLOT_ADDR = [], SLOT_SIZE = [];
+
+function renderSlotTable(){
+  const tbl = $("slotTable");
+  const count = Math.max(1, Math.min(parseInt($("cfgSlotCount").value,10) || 1, OTA_SLOT_MAX));
+  let active = parseInt($("cfgActiveSlot").value,10) || 0;
+  if(active >= count) active = 0;
+
+  let html = "<thead><tr><th>槽</th><th>加载地址</th><th>大小</th><th class='sl-pick'>启动</th></tr></thead><tbody>";
+  for(let i=0;i<count;i++){
+    const a = SLOT_ADDR[i] || 0, sz = SLOT_SIZE[i] || 0;
+    html += "<tr" + (i===active?' class="active"':'') + ">" +
+      "<td class='sl-idx'>" + i + "</td>" +
+      "<td><input type='text' class='slot-addr' data-slot='" + i + "' value='" +
+        (a ? hex32(a) : "") + "' placeholder='0x00000000（空=无效）'></td>" +
+      "<td><input type='text' class='slot-size' data-slot='" + i + "' value='" +
+        (sz ? hex32(sz) : "") + "' placeholder='0x00000000（自动）'></td>" +
+      "<td class='sl-pick'><input type='radio' name='activeSlotRadio' value='" + i + "'" +
+        (i===active?" checked":"") + "></td></tr>";
+  }
+  tbl.innerHTML = html + "</tbody>";
+
+  tbl.querySelectorAll("input[name='activeSlotRadio']").forEach(r => {
+    r.addEventListener("change", () => { $("cfgActiveSlot").value = r.value; renderSlotTable(); });
+  });
+  tbl.querySelectorAll("input.slot-addr").forEach(inp => {
+    inp.addEventListener("blur", () => {
+      const i = parseInt(inp.dataset.slot,10);
+      const v = parseNum(inp.value) || 0;
+      SLOT_ADDR[i] = v; inp.value = v > 0 ? hex32(v) : ""; renderSlotTable();
+    });
+  });
+  tbl.querySelectorAll("input.slot-size").forEach(inp => {
+    inp.addEventListener("blur", () => {
+      const i = parseInt(inp.dataset.slot,10);
+      const v = parseNum(inp.value) || 0;
+      SLOT_SIZE[i] = v; inp.value = v > 0 ? hex32(v) : "";
+    });
+  });
+
+  $("cfgActiveSlot").value = String(active);
+  const nValid = SLOT_ADDR.slice(0,count).filter(a => a > 0).length;
+  $("slotSummary").textContent = "ota_slot_count = " + count + "，active_slot = " +
+    active + "，已配置地址 " + nValid + "/" + count + " 个";
+}
+function slotAdd(){
+  const c = Math.min(OTA_SLOT_MAX, (parseInt($("cfgSlotCount").value,10)||1) + 1);
+  $("cfgSlotCount").value = c; renderSlotTable();
+}
+function slotDel(){
+  const c = Math.max(1, (parseInt($("cfgSlotCount").value,10)||1) - 1);
+  $("cfgSlotCount").value = c; renderSlotTable();
+}
+
+/* ======================= 配置读取 / 写回 ======================= */
+function cfgLoad(){
+  $("cfgHint").textContent = "读取中...";
+  fetch('/api/cfg/full').then(r => r.json()).then(c => {
+    $("cfgWait").value       = c.wait_seconds;
+    $("cfgSsid").value       = c.wifi_ssid || "";
+    $("cfgPass").value       = c.wifi_password || "";
+    $("cfgChannel").value    = c.wifi_channel;
+    $("cfgIp").value         = c.wifi_ip || "";
+    $("cfgMask").value       = c.wifi_netmask || "";
+    $("cfgScl").value        = c.i2c_scl_gpio;
+    $("cfgSda").value        = c.i2c_sda_gpio;
+    $("cfgI2cAddr").value    = hex8(c.i2c_addr);
+    $("cfgUartPort").value   = String(c.uart_port);
+    $("cfgUartTx").value     = (c.uart_tx_gpio === UART_PIN_DEF) ? "" : c.uart_tx_gpio;
+    $("cfgUartRx").value     = (c.uart_rx_gpio === UART_PIN_DEF) ? "" : c.uart_rx_gpio;
+    $("cfgBaud").value       = c.uart_baudrate;
+    $("cfgTrig").value       = c.trig_gpio;
+    $("cfgTrigLevel").value  = String(c.trig_gpio_level);
+    $("cfgBootParam").value  = c.boot_param || "";
+    $("cfgSlotCount").value  = String(c.ota_slot_count || 1);
+    $("cfgActiveSlot").value = String(c.active_slot || 0);
+    $("cfgOtaGpio").value    = (c.ota_gpio === undefined ? 255 : c.ota_gpio);
+    SLOT_ADDR = Array.isArray(c.slot_addr) ? c.slot_addr.slice() : [];
+    SLOT_SIZE = Array.isArray(c.slot_size) ? c.slot_size.slice() : [];
+
+    setFlags(c.flags);
+    renderSlotTable();
+
+    $("cfgEditor").style.display = "";
+    ["cfgSaveBtn","cfgSaveRebootBtn","cfgResetBtn"].forEach(id => $(id).disabled = false);
+    $("cfgHint").innerHTML = '已读取配置。SSID=<b>' + (c.wifi_ssid||"") +
+      '</b>，AP IP=<b>' + (c.wifi_ip||"") + '</b>';
+    log('配置已读取', 'ok');
+  }).catch(e => {
+    $("cfgHint").textContent = "读取失败: " + e;
+    log('读取配置失败: ' + e, 'err');
+  });
+}
+
+function collectCfg(reboot){
+  const num = (id, name) => {
+    const v = parseInt($(id).value, 10);
+    if(isNaN(v)) throw new Error(name + " 必须是数字");
+    return v;
+  };
+  let i2cStr = $("cfgI2cAddr").value.trim();
+  let i2cAddr = /^0x/i.test(i2cStr) ? parseInt(i2cStr,16) : parseInt(i2cStr,10);
+  if(isNaN(i2cAddr)) throw new Error("I2C 地址格式错误");
+
+  const count = Math.max(1, Math.min(parseInt($("cfgSlotCount").value,10)||1, OTA_SLOT_MAX));
+  const addr = [], size = [];
+  for(let i=0;i<OTA_SLOT_MAX;i++){
+    const a = Number(SLOT_ADDR[i] || 0) >>> 0;
+    const s = Number(SLOT_SIZE[i] || 0) >>> 0;
+    if(a !== 0 && (a < FIXED_REGION_END || a > 0xFFFFFFFF))
+      throw new Error("槽 " + i + " 加载地址 " + hex32(a) + " 非法 (须为 0 或 >= " + hex32(FIXED_REGION_END) + ")");
+    addr.push(a); size.push(s);
+  }
+
+  return {
+    flags: readFlags(),
+    wait_seconds: num("cfgWait","等待秒数"),
+    wifi_ssid: $("cfgSsid").value,
+    wifi_password: $("cfgPass").value,
+    wifi_channel: num("cfgChannel","信道"),
+    wifi_ip: $("cfgIp").value.trim(),
+    wifi_netmask: $("cfgMask").value.trim(),
+    i2c_scl_gpio: num("cfgScl","SCL 引脚"),
+    i2c_sda_gpio: num("cfgSda","SDA 引脚"),
+    i2c_addr: i2cAddr,
+    uart_port: parseInt($("cfgUartPort").value,10),
+    uart_tx_gpio: parsePinOr($("cfgUartTx").value, UART_PIN_DEF),
+    uart_rx_gpio: parsePinOr($("cfgUartRx").value, UART_PIN_DEF),
+    uart_baudrate: num("cfgBaud","波特率"),
+    trig_gpio: num("cfgTrig","触发引脚"),
+    trig_gpio_level: parseInt($("cfgTrigLevel").value,10),
+    boot_param: $("cfgBootParam").value,
+    ota_slot_count: count,
+    active_slot: parseInt($("cfgActiveSlot").value,10) || 0,
+    ota_gpio: (parseInt($("cfgOtaGpio").value,10) || 0) & 0xFF,
+    slot_addr: addr,
+    slot_size: size,
+    reboot: !!reboot,
+  };
+}
+
+function cfgSave(reboot){
+  let cfg;
+  try { cfg = collectCfg(reboot); }
+  catch(e){ log(e.message, 'err'); return; }
+
+  const tip = "即将写回配置区：\n\n  SSID: " + cfg.wifi_ssid +
+    "\n  AP IP: " + cfg.wifi_ip + "\n  等待: " + cfg.wait_seconds +
+    " 秒\n  flags: " + hex32(cfg.flags) + (reboot ? "\n\n写回后设备将重启。" : "") +
+    "\n\n只写配置区，不影响 IAP 程序与用户程序。确认继续？";
+  if(!confirm(tip)) return;
+
+  $("cfgSaveBtn").disabled = $("cfgSaveRebootBtn").disabled = true;
+  fetch('/api/cfg/full', { method:'POST', body: JSON.stringify(cfg) })
+    .then(r => r.text().then(t => ({ ok:r.ok, t })))
+    .then(({ok,t}) => {
+      log(t, ok ? 'ok' : 'err');
+      if(ok && !reboot) { $("cfgHint").textContent = "配置已保存（部分参数需重启生效）"; }
+    })
+    .catch(e => log('写回失败: ' + e, 'err'))
+    .finally(() => { $("cfgSaveBtn").disabled = $("cfgSaveRebootBtn").disabled = false; });
+}
+
+function cfgReset(){
+  if(!confirm("恢复为出厂默认配置？\n\n注意：这会覆盖当前所有配置项。")) return;
+  const d = {
+    flags: (1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<7)|(1<<8),
+    wait_seconds: 3, wifi_ssid: "ESP-IAP", wifi_password: "12345678",
+    wifi_channel: 1, wifi_ip: "192.168.4.1", wifi_netmask: "255.255.255.0",
+    i2c_scl_gpio: 7, i2c_sda_gpio: 6, i2c_addr: 0x42,
+    uart_port: 0, uart_tx_gpio: UART_PIN_DEF, uart_rx_gpio: UART_PIN_DEF,
+    uart_baudrate: 115200, trig_gpio: 0, trig_gpio_level: 0,
+    boot_param: "", ota_slot_count: 1, active_slot: 0, ota_gpio: 255,
+    slot_addr: [0x150000,0,0,0,0,0,0,0], slot_size: [0,0,0,0,0,0,0,0],
+  };
+  fetch('/api/cfg/full', { method:'POST', body: JSON.stringify(d) })
+    .then(r => r.text().then(t => ({ ok:r.ok, t })))
+    .then(({ok,t}) => { log(t, ok?'ok':'err'); if(ok) cfgLoad(); })
+    .catch(e => log('恢复默认失败: ' + e, 'err'));
+}
+
+/* ======================= 初始化 ======================= */
+buildFlagsBox();
+updateFlagsField();
+renderSlotTable();
+load();
+</script>
+</body></html>

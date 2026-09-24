@@ -1,0 +1,16 @@
+build
+.vscode
+
+# ---------------------------------------------------------------------------
+# 内置镜像数据 —— 构建产物，不在开发项目中生成/跟踪
+#
+# 由 GitHub Actions 在构建页面时自动生成:
+#   esp_iap_builtin.js      索引 (几 KB)
+#   assets/iap_img_*.js     各芯片完整镜像 (每个 ~800 KB)
+#
+# 本地按需生成 (不提交):
+#   python tools/gen_boot_embed.py --out-js esp_iap_builtin.js --out-dir assets
+# ---------------------------------------------------------------------------
+esp_iap_builtin.js
+assets/
+__pycache__

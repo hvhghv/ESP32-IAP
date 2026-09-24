@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Generate Base64-embedded IAP side image data for esp_iap_tool.html.
+
+v6: 嵌入的是**完整 iap_side.bin** (bootloader + iap_cfg + 分区表 A + IAP 程序),
+    而不再只是 bootloader.bin —— 这样 HTML 的「使用内置 bootloader」模式
+    可以直接烧出可启动的完整 IAP 镜像。
+
+读取优先级:
+  1. <build-root>/iap_<target>/build/iap_side.bin  (优先, 由 merge_bin.py 生成)
+  2. 自动合成: bootloader.bin + iap_cfg 默认值 + 分区表 A + esp_iap.bin
+
+Usage:
+    python gen_boot_embed.py                 # print JS to stdout
+    python gen_boot_embed.py --out FILE      # write JS to FILE
+    python gen_boot_embed.py --check FILE    # verify FILE matches current builds
+"""
+import argparse
+import base64
+import hashlib
+import os
+import sys
+import zlib
+
+TARGETS = ["esp32", "esp32s2", "esp32s3", "esp32c2",
+           "esp32c3", "esp32c5", "esp32c6", "esp32h2"]
+
+DEFAULT_BUILD_ROOT = r"C:\temp"
+
+# 固定区布局 (与 merge_bin.py / iap_common.h 保持一致)
+FIXED_REGION_END = 0x140000
+ADDR_BOOTLOADER = 0x000000
+ADDR_IAP_CFG = 0x008000
+ADDR_PARTITION_TABLE_A = 0x00B000
+ADDR_IAP_APP = 0x010000
+ERASE_BYTE = 0xFF
+
+
+def find_bootloader(build_root, target):
+    """Return path to bootloader.bin for a target, or None."""
+    candidates = [
+        os.path.join(build_root, f"iap_{target}", "build", "bootloader", "bootloader.bin"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def find_side_image(build_root, target):
+    """Return path to a pre-built iap_side.bin, or None."""
+    candidates = [
+        os.path.join(build_root, f"iap_{target}", "build", "iap_side.bin"),
+        os.path.join(build_root, f"iap_{target}", "iap_side.bin"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def synth_side_image(build_root, target):
+    """合成 iap_side.bin: bootloader + iap_cfg + 分区表 A + IAP 程序.
+
+    与 tools/merge_bin.py 的产出一致 (固定区 0x0 ~ 0x13FFFF)。
+    缺少任何必需组件时返回 None。
+    """
+    build_dir = os.path.join(build_root, f"iap_{target}", "build")
+
+    boot_p = find_bootloader(build_root, target)
+    app_p = os.path.join(build_dir, "esp_iap.bin")
+    pt_p = os.path.join(build_dir, "partition_table", "partition-table.bin")
+
+    if not (boot_p and os.path.isfile(app_p) and os.path.isfile(pt_p)):
+        return None
+
+    # 配置区: 优先用现成的, 否则调 gen_factory_cfg.py 生成
+    cfg_data = None
+    for c in ("iap_cfg_default.bin", "_auto_iap_cfg.bin", "iap_cfg.bin"):
+        p = os.path.join(build_dir, c)
+        if os.path.isfile(p):
+            with open(p, "rb") as f:
+                cfg_data = f.read()
+            break
+
+    if cfg_data is None:
+        gen = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "gen_factory_cfg.py")
+        if not os.path.isfile(gen):
+            return None
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            tmp = os.path.join(td, "cfg.bin")
+            r = subprocess.run([sys.executable, gen, "-o", tmp],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            if r.returncode != 0 or not os.path.isfile(tmp):
+                return None
+            with open(tmp, "rb") as f:
+                cfg_data = f.read()
+
+    side = bytearray([ERASE_BYTE] * FIXED_REGION_END)
+
+    def place(data, addr, limit):
+        if addr + len(data) > limit:
+            raise ValueError(
+                f"数据过大: {len(data)} 字节 @ 0x{addr:X} 超出上限 0x{limit:X}"
+            )
+        side[addr:addr + len(data)] = data
+
+    with open(boot_p, "rb") as f:
+        place(f.read(), ADDR_BOOTLOADER, ADDR_IAP_CFG)
+    place(cfg_data, ADDR_IAP_CFG, ADDR_PARTITION_TABLE_A)
+    with open(pt_p, "rb") as f:
+        place(f.read(), ADDR_PARTITION_TABLE_A, ADDR_IAP_APP)
+    with open(app_p, "rb") as f:
+        place(f.read(), ADDR_IAP_APP, FIXED_REGION_END)
+
+    return bytes(side)
+
+
+def collect(build_root):
+    """Return {target: (source, bytes, sha256)} for all found targets."""
+    out = {}
+    missing = []
+    for t in TARGETS:
+        data = None
+        src = ""
+
+        # 1. 优先用现成的 iap_side.bin
+        p = find_side_image(build_root, t)
+        if p:
+            with open(p, "rb") as f:
+                data = f.read()
+            src = "iap_side.bin"
+
+        # 2. 否则自动合成
+        if data is None:
+            try:
+                data = synth_side_image(build_root, t)
+                src = "synth"
+            except ValueError as e:
+                print(f"WARNING: {t} 合成失败: {e}", file=sys.stderr)
+                data = None
+
+        if data is None:
+            missing.append(t)
+            continue
+
+        out[t] = (src, data, hashlib.sha256(data).hexdigest())
+    return out, missing
+
+
+def emit_js(found, compress=True, standalone=False):
+    """Emit the JS block (内嵌到 HTML, 保留兼容)。
+
+    compress=True 时对镜像做 zlib 压缩后再 base64。
+    """
+    lines = []
+    lines.append("/* ==== BEGIN BUILTIN BOOTLOADERS (auto-generated) ==== */")
+    lines.append("/* Generated by tools/gen_boot_embed.py -- do not edit by hand. */")
+    lines.append("/* v6: 嵌入完整的 iap_side.bin (含 IAP 程序), 可直接烧录启动。 */")
+    if compress:
+        lines.append("/* 数据经 zlib 压缩 (raw=解压后大小, size=压缩后大小)。 */")
+    lines.append("const BUILTIN_BOOTLOADERS = {")
+
+    for t in TARGETS:
+        if t not in found:
+            lines.append(f'  {t}: null,')
+            continue
+        src, data, sha = found[t]
+        if compress:
+            packed = zlib.compress(data, 9)
+            b64 = base64.b64encode(packed).decode("ascii")
+            lines.append(
+                f'  {t}: {{ size: {len(packed)}, raw: {len(data)}, '
+                f'src: "{src}", sha256: "{sha}", data: "{b64}" }},'
+            )
+        else:
+            b64 = base64.b64encode(data).decode("ascii")
+            lines.append(
+                f'  {t}: {{ size: {len(data)}, src: "{src}", '
+                f'sha256: "{sha}", data: "{b64}" }},'
+            )
+    lines.append("};")
+    lines.append("/* ==== END BUILTIN BOOTLOADERS ==== */")
+    return "\n".join(lines)
+
+
+def emit_manifest(found, compress=True):
+    """Emit 索引文件内容 (仅元数据, 不含镜像数据)。
+
+    浏览器默认只加载本文件 (几 KB)，烧录时才按需拉取对应芯片的数据文件。
+    """
+    lines = []
+    lines.append("/* ==== BEGIN BUILTIN MANIFEST (auto-generated) ==== */")
+    lines.append("/* Generated by tools/gen_boot_embed.py -- do not edit by hand. */")
+    lines.append("/* v6: 内置镜像**索引** (仅元数据)。镜像数据按需从 ")
+    lines.append(" *     assets/iap_img_<chip>.js 加载, 避免默认加载 4MB。 */")
+    lines.append("window.BUILTIN_MANIFEST = {")
+    lines.append('  version: "v6",')
+    lines.append('  compressed: %s,' % ("true" if compress else "false"))
+    lines.append("  chips: {")
+    for t in TARGETS:
+        if t not in found:
+            lines.append(f'    {t}: null,')
+            continue
+        src, data, sha = found[t]
+        packed = zlib.compress(data, 9) if compress else data
+        lines.append(
+            f'    {t}: {{ file: "iap_img_{t}.js", size: {len(packed)}, '
+            f'raw: {len(data)}, src: "{src}", sha256: "{sha}" }},'
+        )
+    lines.append("  },")
+    lines.append("};")
+    lines.append("/* ==== END BUILTIN MANIFEST ==== */")
+    return "\n".join(lines)
+
+
+def emit_chip_data(target, src, data, sha, compress=True):
+    """Emit 单个芯片的镜像数据文件内容。"""
+    if compress:
+        packed = zlib.compress(data, 9)
+        b64 = base64.b64encode(packed).decode("ascii")
+        meta = f'size: {len(packed)}, raw: {len(data)}, '
+    else:
+        b64 = base64.b64encode(data).decode("ascii")
+        meta = f'size: {len(data)}, '
+
+    lines = []
+    lines.append("/* ==== BEGIN BUILTIN CHIP DATA (auto-generated) ==== */")
+    lines.append("/* Generated by tools/gen_boot_embed.py -- do not edit by hand. */")
+    lines.append(f"/* 芯片 {target} 的完整 iap_side.bin, 按需加载。 */")
+    lines.append("(function () {")
+    lines.append("  window.BUILTIN_CHIP_DATA = window.BUILTIN_CHIP_DATA || {};")
+    lines.append(f'  window.BUILTIN_CHIP_DATA["{target}"] = {{ {meta}'
+                 f'src: "{src}", sha256: "{sha}", data: "{b64}" }};')
+    lines.append("})();")
+    lines.append("/* ==== END BUILTIN CHIP DATA ==== */")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--build-root", default=DEFAULT_BUILD_ROOT)
+    ap.add_argument("--out", help="输出内嵌 JS 片段 (单文件模式)")
+    ap.add_argument("--out-js", help="输出索引文件 (默认 esp_iap_builtin.js)")
+    ap.add_argument("--out-dir", default="assets",
+                    help="输出分芯片数据文件的目录 (默认 assets/)")
+    ap.add_argument("--check", help="校验目标文件中的内嵌数据是否为最新")
+    ap.add_argument("--no-compress", action="store_true", help="不压缩 (调试用)")
+    args = ap.parse_args()
+
+    found, missing = collect(args.build_root)
+    if missing:
+        print(f"WARNING: missing IAP images for: {', '.join(missing)}", file=sys.stderr)
+
+    compress = not args.no_compress
+    raw_total = sum(len(d) for _s, d, _h in found.values())
+
+    # --- 索引文件 (仅元数据, 很小) ---
+    if args.out_js:
+        js = emit_manifest(found, compress=compress)
+        with open(args.out_js, "w", encoding="utf-8", newline="\n") as f:
+            f.write(js + "\n")
+        print(f"Wrote {args.out_js} (索引, {len(found)} chips, "
+              f"{len(js)/1024:.1f} KB)")
+
+    # --- 分芯片数据文件 ---
+    if args.out_dir:
+        os.makedirs(args.out_dir, exist_ok=True)
+        total = 0
+        for t in TARGETS:
+            if t not in found:
+                continue
+            src, data, sha = found[t]
+            js = emit_chip_data(t, src, data, sha, compress=compress)
+            p = os.path.join(args.out_dir, f"iap_img_{t}.js")
+            with open(p, "w", encoding="utf-8", newline="\n") as f:
+                f.write(js + "\n")
+            total += len(js)
+            print(f"  iap_img_{t}.js  {len(js)/1024:7.1f} KB")
+        print(f"Wrote {len(found)} chip files ({raw_total} raw bytes, "
+              f"{total/1024:.1f} KB total)")
+
+    # --- 内嵌片段 (保留兼容) ---
+    if args.out:
+        js = emit_js(found, compress=compress, standalone=False)
+        with open(args.out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(js + "\n")
+        print(f"Wrote {args.out} ({len(found)} chips, "
+              f"{raw_total} raw bytes, {len(js)} JS bytes)")
+
+    # --- 校验 ---
+    if args.check:
+        with open(args.check, "r", encoding="utf-8") as f:
+            existing = f.read()
+        start = existing.find("/* ==== BEGIN BUILTIN BOOTLOADERS")
+        end = existing.find("/* ==== END BUILTIN BOOTLOADERS ==== */")
+        if start < 0 or end < 0:
+            print("CHECK FAILED: markers not found in target file", file=sys.stderr)
+            return 1
+        end += len("/* ==== END BUILTIN BOOTLOADERS ==== */")
+        js = emit_js(found, compress=compress, standalone=False)
+        if existing[start:end] != js:
+            print("CHECK FAILED: embedded bootloaders are stale", file=sys.stderr)
+            return 1
+        print("CHECK OK: embedded bootloaders match current builds")
+        return 0
+
+    if not (args.out or args.out_js or args.out_dir):
+        print(emit_js(found, compress=compress, standalone=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
