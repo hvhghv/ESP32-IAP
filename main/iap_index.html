@@ -40,6 +40,15 @@ textarea{resize:vertical;min-height:52px}
 #log{background:#0a0c10;border:1px solid var(--border);border-radius:6px;
   padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px;
   height:150px;overflow:auto;white-space:pre-wrap;margin-top:10px}
+/* 上传/下载进度条 */
+#progWrap,#dlProgWrap{display:none;margin-top:10px}
+#progWrap.on,#dlProgWrap.on{display:block}
+#progBar,#dlProgBar{height:8px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:5px;overflow:hidden}
+#progFill,#dlProgFill{height:100%;width:0%;background:var(--accent);
+  transition:width .12s linear}
+#progText,#dlProgText{color:var(--dim);font-size:12px;margin-top:4px;
+  font-family:ui-monospace,Consolas,monospace}
 .ok{color:var(--ok)}.err{color:var(--err)}.dim{color:var(--dim)}
 .row{display:grid;grid-template-columns:150px 1fr;gap:8px 14px;
   align-items:center;margin-bottom:9px}
@@ -96,7 +105,11 @@ textarea{resize:vertical;min-height:52px}
   <div class="hint">留空 = 写入整个文件；填数字则只写前 N 字节</div></div>
 </div>
 <input type="file" id="fw" accept=".bin">
-<button onclick="upload()">上传并烧录</button>
+<button id="btnUpload" onclick="upload()">上传并烧录</button>
+<div id="progWrap">
+  <div id="progBar"><div id="progFill"></div></div>
+  <div id="progText"></div>
+</div>
 <div id="log"></div>
 </div>
 
@@ -111,9 +124,12 @@ textarea{resize:vertical;min-height:52px}
   <div><input type="text" id="dlLen" placeholder="留空 = 到 flash 末尾">
   <div class="hint">留空 = 从地址读到 flash 末尾（按 flash 容量自动计算）</div></div>
 </div>
-<button onclick="download()">下载</button>
-<div class="hint" id="dlHint"></div>
+<button id="btnDownload" onclick="download()">下载</button>
+<div id="dlProgWrap">
+  <div id="dlProgBar"><div id="dlProgFill"></div></div>
+  <div id="dlProgText"></div>
 </div>
+<div class="hint" id="dlHint"></div></div>
 
 <div class="card"><h2>操作</h2>
 <button onclick="act('/api/verify')">校验程序</button>
@@ -318,11 +334,44 @@ function rows(obj){ let h=''; for(const k in obj){ h += '<tr><th>'+k+'</th><td>'
 function parseNum(s){ s = String(s||"").trim(); if(!s) return 0; return /^0x/i.test(s) ? parseInt(s,16) : parseInt(s,10); }
 function parsePinOr(s, def){ s = String(s||"").trim(); if(!s) return def; const v = parseNum(s); return isNaN(v) ? def : (v & 0xFF); }
 
+/* ======================= 进度条 ======================= */
+/**
+ * 显示/更新进度条
+ * @param {string} prefix  "prog" (上传) 或 "dlProg" (下载)
+ * @param {number} pct     0~100，<0 表示隐藏
+ * @param {string} text    进度文字
+ */
+function setProgress(prefix, pct, text){
+  const wrap = $(prefix + "Wrap");
+  const fill = $(prefix + "Fill");
+  const txt  = $(prefix + "Text");
+  if(!wrap) return;
+  if(pct < 0){ wrap.classList.remove("on"); fill.style.width = "0%"; txt.textContent = ""; return; }
+  wrap.classList.add("on");
+  fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  txt.textContent = text || "";
+}
+function fmtBytes(n){
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/1024/1024).toFixed(2) + " MB";
+}
+
 /* ======================= 系统信息 / 用户程序 ======================= */
 function load(){
   fetch('/api/info').then(r=>r.json()).then(d=>{ $("sysinfo").innerHTML = rows(d); }).catch(()=>{});
   fetch('/api/app').then(r=>r.json()).then(d=>{ $("appinfo").innerHTML = rows(d); }).catch(()=>{});
 }
+
+/**
+ * 上传固件并烧录。
+ *
+ * 用 XMLHttpRequest 而非 fetch —— 只有 XHR 提供 upload.onprogress，
+ * 能显示真实的发送进度（fetch 无此能力）。
+ *
+ * 注意: 响应处理必须在各自的回调作用域内取 xhr.status，
+ * 不能像旧实现那样在下一个 .then() 里引用上一个 .then() 的参数。
+ */
 function upload(){
   const f = $("fw").files[0];
   if(!f){ log('请先选择文件','err'); return; }
@@ -337,9 +386,54 @@ function upload(){
 
   log('开始上传 ' + f.name + ' (' + f.size + ' 字节) → ' +
       (addr || '0x140000') + '，长度 ' + (len || f.size) + ' ...');
-  fetch(url, {method:'POST', body:f}).then(r=>r.text()).then(t=>{
-    log(t, r.ok?'ok':'err'); load();
-  }).catch(e=>log('上传失败: '+e,'err'));
+
+  const btn = $("btnUpload");
+  if(btn) btn.disabled = true;
+  setProgress("prog", 0, "准备中...");
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', url, true);
+
+  /* 发送进度 (浏览器 → 设备) */
+  xhr.upload.onprogress = e => {
+    if(!e.lengthComputable) return;
+    const pct = e.loaded / e.total * 100;
+    setProgress("prog", pct,
+      "上传中 " + pct.toFixed(1) + "%  " +
+      fmtBytes(e.loaded) + " / " + fmtBytes(e.total));
+  };
+  /* 上传完毕, 设备正在写入 flash —— 此时无进度可报 */
+  xhr.upload.onload = () => {
+    setProgress("prog", 100, "上传完毕，设备写入中...");
+  };
+
+  xhr.onload = () => {
+    const ok = xhr.status >= 200 && xhr.status < 300;
+    const t = xhr.responseText || ("HTTP " + xhr.status);
+    if(ok){
+      setProgress("prog", 100, "完成");
+      log(t, 'ok');
+      load();
+      setTimeout(()=>setProgress("prog", -1), 1500);
+    }else{
+      setProgress("prog", -1);
+      log(t, 'err');
+    }
+    if(btn) btn.disabled = false;
+  };
+  xhr.onerror = () => {
+    setProgress("prog", -1);
+    log('上传失败: 网络错误 (连接中断或设备重启)', 'err');
+    if(btn) btn.disabled = false;
+  };
+  xhr.ontimeout = () => {
+    setProgress("prog", -1);
+    log('上传失败: 超时', 'err');
+    if(btn) btn.disabled = false;
+  };
+  xhr.timeout = 0;   /* 无超时: 大文件写入 flash 可能耗时较久 */
+
+  xhr.send(f);
 }
 
 function download(){
@@ -353,29 +447,75 @@ function download(){
   $("dlHint").textContent = "下载中...";
   log('开始下载 ' + (addr || '0x140000') + '，长度 ' + (len || '到 flash 末尾') + ' ...');
 
+  const btn = $("btnDownload");
+  if(btn) btn.disabled = true;
+  setProgress("dlProg", 0, "请求中...");
+
   fetch(url).then(r => {
     if(!r.ok) return r.text().then(t => { throw new Error(t); });
     const disp = r.headers.get("Content-Disposition") || "";
     let name = "flash.bin";
     const m = disp.match(/filename="?([^"]+)"?/);
     if(m) name = m[1];
-    return r.blob().then(b => ({ name, b }));
+
+    /*
+     * 用 ReadableStream 逐块读取, 以便显示下载进度。
+     * 若浏览器/环境不支持 body 流, 回退到 r.blob()。
+     */
+    const total = parseInt(r.headers.get("Content-Length") || "0", 10);
+    if(!r.body || !r.body.getReader){
+      return r.blob().then(b => ({ name, b }));
+    }
+
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    const pump = () => reader.read().then(({done, value}) => {
+      if(done){
+        return { name, b: new Blob(chunks, {type:"application/octet-stream"}) };
+      }
+      chunks.push(value);
+      got += value.length;
+      if(total > 0){
+        const pct = got / total * 100;
+        setProgress("dlProg", pct,
+          "下载中 " + pct.toFixed(1) + "%  " +
+          fmtBytes(got) + " / " + fmtBytes(total));
+      }else{
+        setProgress("dlProg", 50, "下载中 " + fmtBytes(got));
+      }
+      return pump();
+    });
+    return pump();
   }).then(({name,b}) => {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(b);
     a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
+    setProgress("dlProg", 100, "完成");
     $("dlHint").textContent = "已下载 " + name + " (" + b.size + " 字节)";
     log('下载完成: ' + name + ' (' + b.size + ' 字节)', 'ok');
+    setTimeout(()=>setProgress("dlProg", -1), 1500);
   }).catch(e => {
+    setProgress("dlProg", -1);
     $("dlHint").textContent = "下载失败: " + e.message;
     log('下载失败: ' + e.message, 'err');
+  }).finally(() => {
+    if(btn) btn.disabled = false;
   });
 }
+
+/**
+ * 执行一个 POST 动作 (app erase / boot / clearfail 等)。
+ *
+ * 响应状态必须在同一个回调作用域内取, 不能跨 .then() 引用。
+ */
 function act(u){
-  fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{ log(t, r.ok?'ok':'err'); load(); })
-    .catch(e=>log('失败: '+e,'err'));
+  fetch(u,{method:'POST'})
+    .then(r => r.text().then(t => ({ ok: r.ok, t })))
+    .then(({ok,t}) => { log(t, ok?'ok':'err'); load(); })
+    .catch(e => log('失败: '+e,'err'));
 }
 
 /* ======================= 功能开关 ======================= */
