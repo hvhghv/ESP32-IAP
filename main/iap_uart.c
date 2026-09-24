@@ -212,6 +212,22 @@ void iap_term_set_mute(bool mute)
 }
 
 /**
+ * @brief 等待所有后端的发送缓冲排空
+ *
+ * ⚠️ USB-Serial-JTAG 的 write 是**异步**的: 数据先进入驱动缓冲,
+ *    再由硬件在后续若干毫秒内发出。若在提示文本尚未发完时就开始
+ *    XMODEM 会话, 这些残留字节会被发送方当作协议数据 (ACK/NAK) 读走,
+ *    造成「设备已正确收包但发送方判定 ACK 无效」的假象。
+ *
+ *    因此进入独占会话前必须调用本函数, 确保提示文本已真正送出。
+ */
+void iap_term_flush(void)
+{
+    /* 给驱动/硬件足够时间把缓冲写完 (USB CDC 典型 < 10ms) */
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+/**
  * @brief 向所有已注册后端输出字符串
  */
 void iap_term_write(const char *s)
@@ -1086,7 +1102,8 @@ static void cmd_xmodem_recv_var(void)
     term_puts("请使用 XMODEM 协议发送镜像文件 (Ctrl+C 取消)...\r\n");
     term_puts("提示: 文件应为 build_user_app.py 打包的 <name>_flash.bin\r\n");
 
-    /* 静默终端输出: 避免日志文本混入 XMODEM 数据流 */
+    /* 静默终端输出并等缓冲排空: 避免日志/提示文本混入 XMODEM 数据流 */
+    iap_term_flush();
     iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data_var, &wctx);
     iap_term_set_mute(false);
@@ -1200,6 +1217,7 @@ static void cmd_xmodem_recv(uint32_t offset)
     };
 
     term_puts("请使用 XMODEM 协议发送文件 (Ctrl+C 取消)...\r\n");
+    iap_term_flush();
     iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data, &wctx);
     iap_term_set_mute(false);
@@ -1285,6 +1303,7 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
                     length / 1024);
         term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
 
+        iap_term_flush();
         iap_term_set_mute(true);
         esp_err_t err = iap_xmodem_send(&xctx, "var_region.bin", length,
                                         xm_on_read_raw, &rctx);
@@ -1330,6 +1349,7 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
     term_printf("开始发送 %" PRIu32 " 字节 (从 0x%" PRIx32 ")...\r\n", length, offset);
     term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
 
+    iap_term_flush();
     iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_send(&xctx, "user_app.bin", length, xm_on_read, &rctx);
     iap_term_set_mute(false);

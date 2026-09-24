@@ -120,6 +120,15 @@ void iap_term_printf(const char *fmt, ...);
 void iap_term_set_mute(bool mute);
 
 /**
+ * @brief 等待所有后端的发送缓冲排空
+ *
+ * USB-Serial-JTAG 的 write 是异步的 (先进驱动缓冲, 再由硬件发出)。
+ * 进入 XMODEM 等独占会话前必须调用, 否则尚未发完的提示文本会被
+ * 发送方当作协议数据 (ACK/NAK) 读走。
+ */
+void iap_term_flush(void);
+
+/**
  * @brief 注册一个终端后端并启动对应的读取任务
  *
  * 每个后端独立一个任务，共享同一套命令表与行缓冲 (各自独立行缓冲)。
