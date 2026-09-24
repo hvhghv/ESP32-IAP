@@ -138,6 +138,22 @@ static void term_task(void *arg);
 static const iap_term_backend_t *s_backends[IAP_TERM_MAX_BACKENDS];
 static int s_backend_count = 0;
 
+/*
+ * 当前正在执行命令的终端后端。
+ *
+ * 每个后端有独立的读取任务 (见 term_task)，命令在哪个后端的任务里
+ * 被解析执行，XMODEM 等需要独占通道的操作就必须用**同一个后端** ——
+ * 否则会出现「终端在 USB、XMODEM 却在 UART0」的错配，
+ * 表现为握手字符发到了没人接的串口上，传输永远无法开始。
+ */
+static const iap_term_backend_t *s_active_backend = NULL;
+
+/** 取得当前执行命令的后端 (可能为 NULL，如从非终端上下文调用) */
+static const iap_term_backend_t *term_active_backend(void)
+{
+    return s_active_backend;
+}
+
 esp_err_t iap_term_attach(const iap_term_backend_t *backend, const char *task_name)
 {
     if (backend == NULL || s_backend_count >= IAP_TERM_MAX_BACKENDS) {
@@ -932,30 +948,18 @@ static esp_err_t xm_on_read_raw(void *user, uint8_t *buf, uint32_t offset, size_
     return esp_flash_read(NULL, buf, ctx->base + offset, len);
 }
 
-/** UART 读回调 (供 XMODEM 使用)
+/*
+ * XMODEM 通道选择
  *
- * ⚠️ 传输期间终端任务被 XMODEM 阻塞，无法自行读 Ctrl+C。
- *    因此在这里**顺带检测 0x03**，一旦收到就置位 s_cancel，
- *    XMODEM 主循环会在下次检查时优雅退出。
+ * ⚠️ 必须使用**执行本命令的终端后端**，不能硬编码 UART0。
  *
- * 返回值约定 (与 iap_xmodem_read_fn_t 一致):
- *   > 0  实际读取的字节数
- *   = 0  超时 (无数据)
- *   < 0  已取消 (检测到 Ctrl+C)
- *
- * ⚠️⚠️ 关键: **仅在非数据阶段检测 0x03**。
- *
- *   XMODEM 包体是任意二进制，固件镜像中 0x03 极为常见。
- *   若在数据阶段也扫描 0x03，会被误判为取消请求，
- *   导致「握手正常但一发数据就中断」。
- *
- *   协议层通过 ctx->raw_mode 告知当前是否在读二进制数据:
- *     raw_mode == false → 握手/等待控制字符, 检测 0x03
- *     raw_mode == true  → 读包体/序号/CRC, 不检测
- *
- *   本回调的 user 是 uart_port_t*, 无法直接访问 ctx,
- *   故由协议层在切换阶段时调用 iap_uart_xmodem_set_raw_mode() 通知。
+ * 设备可能同时挂载 UART 与 USB 两个终端后端 (见 term_task)，
+ * 用户从哪个通道敲的 `xmodem recv`，数据就必须走哪个通道。
+ * 若固定用 UART0，而终端实际在 USB 上，握手字符会发到无人接线的
+ * UART0，发送方永远等不到 'C' —— 表现为「XMODEM 完全无效」。
  */
+
+/** 数据阶段标志 (由协议层切换, 见 iap_uart_xmodem_set_raw_mode) */
 static volatile bool s_xm_raw_mode = false;
 
 /** 由 XMODEM 协议层调用: 标记当前是否处于二进制数据读取阶段 */
@@ -964,10 +968,25 @@ void iap_uart_xmodem_set_raw_mode(bool raw)
     s_xm_raw_mode = raw;
 }
 
+/** XMODEM 读回调: 从当前终端后端读取
+ *
+ * 返回值约定 (与 iap_xmodem_read_fn_t 一致):
+ *   > 0  实际读取的字节数
+ *   = 0  超时 (无数据)
+ *   < 0  已取消 (检测到 Ctrl+C)
+ *
+ * ⚠️ 仅在**非数据阶段**扫描 0x03: XMODEM 包体是任意二进制，
+ *    固件镜像中 0x03 极为常见，数据阶段扫描会误判为取消。
+ */
 static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_ms)
 {
-    uart_port_t port = *(uart_port_t *)user;
-    int n = uart_read_bytes(port, buf, len, pdMS_TO_TICKS(timeout_ms));
+    (void)user;
+    const iap_term_backend_t *be = term_active_backend();
+    if (be == NULL || be->read == NULL) {
+        return 0;
+    }
+
+    int n = be->read(buf, len, timeout_ms);
     if (n <= 0) {
         return 0;
     }
@@ -987,11 +1006,15 @@ static int xm_uart_read(void *user, uint8_t *buf, size_t len, uint32_t timeout_m
     return n;
 }
 
-/** UART 写回调 (供 XMODEM 使用) */
+/** XMODEM 写回调: 写入当前终端后端 */
 static int xm_uart_write(void *user, const uint8_t *buf, size_t len)
 {
-    uart_port_t port = *(uart_port_t *)user;
-    int n = uart_write_bytes(port, buf, len);
+    (void)user;
+    const iap_term_backend_t *be = term_active_backend();
+    if (be == NULL || be->write == NULL) {
+        return 0;
+    }
+    int n = be->write(buf, len);
     return (n < 0) ? 0 : n;
 }
 
@@ -1031,7 +1054,7 @@ static void cmd_xmodem_recv_var(void)
     iap_xmodem_ctx_t xctx = {
         .read        = xm_uart_read,
         .write       = xm_uart_write,
-        .user        = &s_uart_num,
+        .user        = NULL,   /* 读写回调改用当前终端后端 */
         .cancel_flag = &s_cancel,
     };
 
@@ -1143,7 +1166,7 @@ static void cmd_xmodem_recv(uint32_t offset)
     iap_xmodem_ctx_t xctx = {
         .read        = xm_uart_read,
         .write       = xm_uart_write,
-        .user        = &s_uart_num,
+        .user        = NULL,   /* 读写回调改用当前终端后端 */
         .cancel_flag = &s_cancel,
     };
 
@@ -1222,7 +1245,7 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
         iap_xmodem_ctx_t xctx = {
             .read        = xm_uart_read,
             .write       = xm_uart_write,
-            .user        = &s_uart_num,
+            .user        = NULL,   /* 读写回调改用当前终端后端 */
             .cancel_flag = &s_cancel,
         };
 
@@ -1266,7 +1289,7 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
     iap_xmodem_ctx_t xctx = {
         .read        = xm_uart_read,
         .write       = xm_uart_write,
-        .user        = &s_uart_num,
+        .user        = NULL,   /* 读写回调改用当前终端后端 */
         .cancel_flag = &s_cancel,
     };
 
@@ -1572,7 +1595,10 @@ static void term_task(void *arg)
             iap_term_write("\r\n");
             if (len > 0) {
                 line[len] = '\0';
+                /* 记录命令来自哪个后端: XMODEM 等独占操作需沿用同一通道 */
+                s_active_backend = be;
                 exec_line(line);
+                s_active_backend = NULL;
                 len = 0;
             }
             iap_term_write("iap> ");
