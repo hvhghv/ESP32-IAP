@@ -591,6 +591,36 @@ void app_main(void)
             app_ok = true;
         }
 
+        /*
+         * 6c. 防砖: 检测「反复启动失败」
+         *
+         * 场景: 用户区镜像首字节是 0xE9 (存在性检查通过)，但实际
+         *       不可启动 (chip_id 不符 / 段表损坏 / SHA256 失败)。
+         *       bootloader 会拒绝加载并回落 IAP；而 IAP 又只看到
+         *       0xE9 就再次启动 —— 形成无限重启循环，设备无法使用。
+         *
+         * 判据: bootloader 每次尝试启动用户程序都会递增 RTC RAM 中的
+         *       reboot_counter；超过 IAP_BOOT_MAX_RETRY 后它会复位
+         *       RTC RAM 并回落 IAP。因此 IAP 启动时若发现该计数
+         *       已达上限 (或 RTC RAM 刚被复位)，说明上一轮启动失败，
+         *       此时必须停在下载模式，而不是再次尝试。
+         *
+         * 注意: 冷启动时 reboot_counter 为 0，不会误判。
+         */
+        if (app_ok) {
+            uint16_t rc = bootloader_common_get_rtc_retain_mem_reboot_counter();
+            if (rc > IAP_BOOT_MAX_RETRY) {
+                ESP_LOGE(TAG, "========================================");
+                ESP_LOGE(TAG, " 检测到用户程序连续启动失败 %u 次 (上限 %d)",
+                         (unsigned)rc, IAP_BOOT_MAX_RETRY);
+                ESP_LOGE(TAG, " 已停止自动启动，停留在 IAP 下载模式");
+                ESP_LOGE(TAG, " 请重新烧录用户程序，或执行 app erase 清除");
+                ESP_LOGE(TAG, "========================================");
+                app_ok = false;
+                reason = IAP_BOOT_REASON_CRC_FAILED;
+            }
+        }
+
         if (app_ok) {
             /* 更新配置区并启动用户程序 */
             iap_config_inc_boot_count();

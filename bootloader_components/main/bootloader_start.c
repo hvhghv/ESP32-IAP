@@ -87,8 +87,12 @@
 /** IAP 程序区最大大小 (0x140000 - 0x10000 = 0x130000 = 1216KB) */
 #define IAP_APP_MAX_SIZE      0x130000
 
-/** 防砖: 连续启动 APP 失败次数上限 */
-#define IAP_BOOT_MAX_RETRY    5
+/*
+ * 防砖: 连续启动 APP 失败次数上限。
+ *
+ * 定义在 main/iap_boot_param.h (IAP 侧同样使用该常量判断
+ * 「上一轮启动失败」并停止重试)，此处不再重复定义。
+ */
 
 static const char *TAG = "boot";
 
