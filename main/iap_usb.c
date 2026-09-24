@@ -62,6 +62,25 @@ static int usb_backend_write(const uint8_t *buf, size_t len)
     return usb_serial_jtag_write_bytes(buf, len, pdMS_TO_TICKS(100));
 }
 
+/**
+ * @brief 等待 USB 发送缓冲排空
+ *
+ * ⚠️ usb_serial_jtag_write_bytes 是**异步**的: 数据先进驱动环形缓冲,
+ *    再由 USB 外设在主机轮询时发出。若在缓冲尚未排空时就开始
+ *    XMODEM 会话, 残留的提示文本会被发送方当作协议数据读走。
+ *
+ *    这里用固定延时等待硬件发出 (USB CDC 的 1KB 缓冲在 115200 下
+ *    约需 90ms; 取 200ms 留足余量)。主机未连接时数据发不出去,
+ *    但那种情况下 XMODEM 本身也无法工作, 延时不会造成额外问题。
+ */
+static void usb_backend_flush(void)
+{
+    if (!s_usb_installed) {
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
+}
+
 static bool usb_backend_ready(void)
 {
     return s_usb_installed;
@@ -72,6 +91,7 @@ static const iap_term_backend_t s_usb_backend = {
     .read  = usb_backend_read,
     .write = usb_backend_write,
     .ready = usb_backend_ready,
+    .flush = usb_backend_flush,
 };
 
 /* -------------------------------------------------------------------------- */

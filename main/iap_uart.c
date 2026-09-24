@@ -215,16 +215,22 @@ void iap_term_set_mute(bool mute)
  * @brief 等待所有后端的发送缓冲排空
  *
  * ⚠️ USB-Serial-JTAG 的 write 是**异步**的: 数据先进入驱动缓冲,
- *    再由硬件在后续若干毫秒内发出。若在提示文本尚未发完时就开始
+ *    再由硬件在主机轮询时发出。若在提示文本尚未发完时就开始
  *    XMODEM 会话, 这些残留字节会被发送方当作协议数据 (ACK/NAK) 读走,
  *    造成「设备已正确收包但发送方判定 ACK 无效」的假象。
  *
- *    因此进入独占会话前必须调用本函数, 确保提示文本已真正送出。
+ *    因此进入独占会话前必须调用本函数。后端若实现了 flush
+ *    (如 USB 的 wait_tx_done) 则调用之, 否则退化为短暂延时。
  */
 void iap_term_flush(void)
 {
-    /* 给驱动/硬件足够时间把缓冲写完 (USB CDC 典型 < 10ms) */
-    vTaskDelay(pdMS_TO_TICKS(50));
+    for (int i = 0; i < s_backend_count; i++) {
+        if (s_backends[i]->flush) {
+            s_backends[i]->flush();
+        }
+    }
+    /* 兜底延时: 覆盖无 flush 实现的通道 (UART 为同步写, 无需等待) */
+    vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 /**
@@ -1099,12 +1105,20 @@ static void cmd_xmodem_recv_var(void)
         .cancel_flag = &s_cancel,
     };
 
+    /*
+     * 先等此前的输出排空, 再静默。
+     *
+     * ⚠️ 提示文本必须放在静默**之后**打印 —— 否则它会残留在 USB
+     *    发送缓冲中, 与握手字符 'C' / ACK 混在同一字节流里,
+     *    发送方逐字节解析时会读到这些文本字节而误判,
+     *    导致「设备已收包但发送方等不到有效 ACK」。
+     *    用户仍可从命令回显看到操作已开始。
+     */
+    iap_term_flush();
+    iap_term_set_mute(true);
     term_puts("请使用 XMODEM 协议发送镜像文件 (Ctrl+C 取消)...\r\n");
     term_puts("提示: 文件应为 build_user_app.py 打包的 <name>_flash.bin\r\n");
 
-    /* 静默终端输出并等缓冲排空: 避免日志/提示文本混入 XMODEM 数据流 */
-    iap_term_flush();
-    iap_term_set_mute(true);
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data_var, &wctx);
     iap_term_set_mute(false);
 
@@ -1216,9 +1230,9 @@ static void cmd_xmodem_recv(uint32_t offset)
         .cancel_flag = &s_cancel,
     };
 
-    term_puts("请使用 XMODEM 协议发送文件 (Ctrl+C 取消)...\r\n");
     iap_term_flush();
     iap_term_set_mute(true);
+    term_puts("请使用 XMODEM 协议发送文件 (Ctrl+C 取消)...\r\n");
     esp_err_t err = iap_xmodem_receive(&xctx, xm_on_data, &wctx);
     iap_term_set_mute(false);
 
@@ -1301,10 +1315,10 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
         term_printf("发送可变区 0x%06X ~ 0x%06X (%" PRIu32 " KB)...\r\n",
                     IAP_FIXED_REGION_END, IAP_FIXED_REGION_END + length,
                     length / 1024);
-        term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
-
         iap_term_flush();
         iap_term_set_mute(true);
+        term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
+
         esp_err_t err = iap_xmodem_send(&xctx, "var_region.bin", length,
                                         xm_on_read_raw, &rctx);
         iap_term_set_mute(false);
@@ -1347,10 +1361,10 @@ static void cmd_xmodem_send(uint32_t offset, uint32_t length)
     };
 
     term_printf("开始发送 %" PRIu32 " 字节 (从 0x%" PRIx32 ")...\r\n", length, offset);
-    term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
 
     iap_term_flush();
     iap_term_set_mute(true);
+    term_puts("等待接收方握手 (Ctrl+C 取消)...\r\n");
     esp_err_t err = iap_xmodem_send(&xctx, "user_app.bin", length, xm_on_read, &rctx);
     iap_term_set_mute(false);
 
