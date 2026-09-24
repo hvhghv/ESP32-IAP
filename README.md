@@ -2696,18 +2696,20 @@ esptool.py read_flash 0x10000 0x2000 cfg_backup.bin
 
 **芯片支持矩阵**：
 
-| 芯片 | WiFi | I2C 从机 | 说明 |
-|------|:----:|:--------:|------|
-| ESP32 | ✅ | ✅ | 完整支持 |
-| ESP32-S2 | ✅ | ✅ | 完整支持 |
-| ESP32-S3 | ✅ | ✅ | 完整支持 |
-| ESP32-C2 | ✅ | ❌ | 无 I2C 从机（`SOC_I2C_SUPPORT_SLAVE=0`） |
-| ESP32-C3 | ✅ | ✅ | 完整支持 |
-| ESP32-C6 | ✅ | ✅ | 完整支持 |
-| ESP32-H2 | ❌ | ✅ | 无 WiFi（`SOC_WIFI_SUPPORTED=0`） |
+| 芯片 | WiFi | I2C 从机 | RTC RAM | 说明 |
+|------|:----:|:--------:|:-------:|------|
+| ESP32 | ✅ | ✅ | ✅ | 完整支持 |
+| ESP32-S2 | ✅ | ✅ | ✅ | 完整支持 |
+| ESP32-S3 | ✅ | ✅ | ✅ | 完整支持 |
+| ESP32-C3 | ✅ | ✅ | ✅ | 完整支持 |
+| ESP32-C5 | ✅ | ✅ | ✅ | 完整支持（WiFi 6 + USB-Serial-JTAG） |
+| ESP32-C6 | ✅ | ✅ | ✅ | 完整支持 |
+| ESP32-H2 | ❌ | ✅ | ✅ | 无 WiFi（`SOC_WIFI_SUPPORTED=0`） |
+| ESP32-C2 | ✅ | ❌ | ❌ | **不支持**：无 RTC FAST RAM，无法传递启动参数 |
 
 > 不支持的功能在源码中用 `#if` 守卫，对应接口返回 `ESP_ERR_NOT_SUPPORTED`，
-> 不影响其余功能编译与运行。
+> 不影响其余功能编译与运行。ESP32-C2 因缺少 RTC FAST RAM 被
+> `main/iap_boot_param.h` 用 `#error` 明确拦截，未纳入构建矩阵。
 
 **Job 结构**：
 

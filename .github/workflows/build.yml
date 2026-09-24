@@ -44,6 +44,7 @@ name: Build IAP Firmware
 #   esp32s2  完整支持
 #   esp32s3  完整支持
 #   esp32c3  完整支持
+#   esp32c5  完整支持（WiFi 6 + USB-Serial-JTAG）
 #   esp32c6  完整支持
 #   esp32h2  无 WiFi（SOC_WIFI_SUPPORTED=0），其余功能正常
 #
@@ -96,12 +97,12 @@ jobs:
       - name: Determine target list
         id: set
         run: |
-          ALL='["esp32","esp32s2","esp32s3","esp32c3","esp32c6","esp32h2"]'
+          ALL='["esp32","esp32s2","esp32s3","esp32c3","esp32c5","esp32c6","esp32h2"]'
           INPUT='${{ inputs.targets }}'
 
           if [ -z "$INPUT" ]; then
             echo "targets=$ALL" >> $GITHUB_OUTPUT
-            echo "构建全部 6 个目标"
+            echo "构建全部 7 个目标"
           else
             JSON=$(echo "$INPUT" | tr -d ' ' | awk -F, \
               '{printf "["; for(i=1;i<=NF;i++){printf "\"%s\"", $i; if(i<NF) printf ","}; printf "]"}')
