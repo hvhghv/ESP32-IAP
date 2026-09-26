@@ -379,24 +379,23 @@ if (p->magic == IAP_PARAM_MAGIC && iap_crc_ok(p)) {
 
 **结论**：**"每次上电必跑 IAP"的要求仍然满足** —— 冷启动时 RTC RAM 无效，默认走 IAP。
 
-### 3.1.4 防砖机制（boot_count）
+### 3.1.4 防砖机制（已移除）
 
-IDF 的 `rtc_retain_mem_t` **自带 `reboot_counter`**，可直接复用：
-
-```c
-/* bootloader 启动 APP 前 */
-bootloader_common_update_rtc_retain_mem(NULL, true);   /* reboot_counter++ */
-if (bootloader_common_get_rtc_retain_mem_reboot_counter() > 5) {
-    /* 强制回 IAP */
-    p->boot_target = 0;
-    bootloader_common_reset_rtc_retain_mem();   /* 清零计数器 */
-}
-
-/* APP 启动成功后 */
-bootloader_common_reset_rtc_retain_mem();       /* 清零 reboot_counter */
-```
-
-> **依据**：`bootloader_common_loader.c:207,248` 已实现 `reboot_counter` 自增与 CRC 维护。
+> **v8 已移除防砖计数机制。**
+>
+> 早期设计曾用 `rtc_retain_mem_t.reboot_counter` 或配置区的
+> `boot_fail_count` 做「连续启动失败则停止重试」的保护。但该机制
+> 存在误报问题：计数器只增不减（用户程序无法访问配置区，无法清零），
+> 设备正常重启若干次后即被误判为「启动失败」，导致界面显示
+> “用户程序 CRC 校验失败”并停止启动。
+>
+> 现在 IAP **不再对用户程序做任何启动重试限制**：
+>   - 镜像合法性完全由 bootloader 启动时自校验
+>     (magic / 段表 / SHA256 / chip_id)
+>   - 校验失败时 bootloader 自动回落到 IAP (factory)，不会变砖
+>   - 启动决策完全由配置区与 RTC RAM 控制，无隐式计数
+>
+> 若需“启动失败后停止重试”的行为，应由用户程序自行实现。
 
 ### 3.2 为什么不能"IAP 直跳 APP"
 
@@ -740,22 +739,13 @@ CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE=128   # >= sizeof(iap_boot_param_t)=10
 > 配置字段（WiFi / I2C / 触发源等）**仍在 `iap_cfg` 里**，
 > APP 通过 `p->cfg_addr` 自行读 flash。见 §5.5。
 
-### 6.3 防砖机制
+### 6.3 防砖机制（已移除）
 
-```c
-/* bootloader 启动 APP 前 */
-bootloader_common_update_rtc_retain_mem(NULL, true);   /* reboot_counter++ */
-if (bootloader_common_get_rtc_retain_mem_reboot_counter() > 5) {
-    p->boot_target = 0;                        /* 强制回 IAP */
-    bootloader_common_reset_rtc_retain_mem();  /* 清零 */
-}
-
-/* APP 启动成功后 */
-bootloader_common_reset_rtc_retain_mem();      /* 清零 reboot_counter */
-```
-
-> **复用 IDF 现成字段**：`rtc_retain_mem_t.reboot_counter` 已由 IDF 维护
-> （`bootloader_common_loader.c:207,248`），无需自定义计数变量。
+> **v8 已移除。** 详见 §3.1.4。
+>
+> 现在 bootloader 按 RTC RAM 请求直接加载用户程序，不做任何重试计数；
+> 镜像校验与失败回落完全由 IDF 的 `bootloader_utility_load_boot_image()`
+> 负责。
 
 ---
 

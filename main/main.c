@@ -591,43 +591,9 @@ void app_main(void)
             app_ok = true;
         }
 
-        /*
-         * 6c. 防砖: 检测「反复启动失败」
-         *
-         * 场景: 用户区镜像首字节是 0xE9 (存在性检查通过)，但实际
-         *       不可启动 (chip_id 不符 / 段表损坏 / SHA256 失败)。
-         *       bootloader 会拒绝加载并回落 IAP；而 IAP 又只看到
-         *       0xE9 就再次启动 —— 形成无限重启循环，设备无法使用。
-         *
-         * 判据: 配置区的 boot_fail_count。
-         *       IAP 每次准备启动用户程序前 +1 (见下方 app_ok 分支)；
-         *       用户程序成功运行后应调用 iap_config_clear_boot_fail()
-         *       清零。若一直失败，该值会持续累加，达到上限即停止尝试。
-         *
-         * ⚠️ 不能用 RTC RAM 的 reboot_counter:
-         *    bootloader 超限后会 bootloader_common_reset_rtc_retain_mem()
-         *    清零整个 RTC RAM (含 custom 区)，IAP 侧读到的恒为 0。
-         *    配置区在 flash 中，不受该复位影响。
-         */
-        if (app_ok) {
-            uint16_t fails = iap_config_get_boot_fail();
-            if (fails > IAP_BOOT_MAX_RETRY) {
-                ESP_LOGE(TAG, "========================================");
-                ESP_LOGE(TAG, " 用户程序连续启动失败 %u 次 (上限 %d)",
-                         (unsigned)fails, IAP_BOOT_MAX_RETRY);
-                ESP_LOGE(TAG, " 已停止自动启动，停留在 IAP 下载模式");
-                ESP_LOGE(TAG, " 请重新烧录用户程序，或执行 app erase 清除");
-                ESP_LOGE(TAG, " 清除计数: app clearfail");
-                ESP_LOGE(TAG, "========================================");
-                app_ok = false;
-                reason = IAP_BOOT_REASON_CRC_FAILED;
-            }
-        }
-
         if (app_ok) {
             /* 更新配置区并启动用户程序 */
             iap_config_inc_boot_count();
-            iap_config_inc_boot_fail();     /* 防砖: 记录本次尝试 */
             iap_config_set_boot_reason(IAP_BOOT_REASON_NONE);
 
             /* 写入启动参数字符串，供用户程序初始化使用 */
@@ -638,13 +604,11 @@ void app_main(void)
             /* 正常情况下不会返回 */
             ESP_LOGE(TAG, "启动用户程序失败: %s", esp_err_to_name(err));
             enter_download = true;
-            reason = IAP_BOOT_REASON_CRC_FAILED;
+            reason = IAP_BOOT_REASON_BOOT_FAIL;
         } else {
-            /* 校验失败 -> 进入 IAP 下载模式 */
+            /* 无镜像 -> 进入 IAP 下载模式 */
             enter_download = true;
-            reason = iap_image_slot_present(slot)
-                   ? IAP_BOOT_REASON_CRC_FAILED
-                   : IAP_BOOT_REASON_NO_VALID_APP;
+            reason = IAP_BOOT_REASON_NO_VALID_APP;
         }
     }
 
@@ -655,16 +619,6 @@ void app_main(void)
     ESP_LOGW(TAG, "========================================");
 
     iap_config_set_boot_reason(reason);
-
-    /*
-     * 防砖计数维护:
-     *   仅当本次是「启动用户程序失败回落」(CRC_FAILED) 时保留计数，
-     *   使它能持续累加直至触发上限。其余原因 (用户主动请求、
-     *   无镜像、配置错误等) 说明与启动失败无关，清零以免误判。
-     */
-    if (reason != IAP_BOOT_REASON_CRC_FAILED) {
-        iap_config_clear_boot_fail();
-    }
 
     /* 7a. UART 终端 (最先启动，便于用户交互) */
     err = iap_uart_start();

@@ -233,7 +233,7 @@ static void fill_defaults(iap_cfg_data_t *cfg)
                  IAP_CFG_DEFAULT_FLAGS_USB;   /* 支持 USB 的芯片默认开启 */
 
     cfg->wait_seconds     = IAP_CFG_DEFAULT_WAIT_SEC;
-    cfg->boot_fail_count  = 0;      /* 防砖计数器: 出厂为 0 */
+    cfg->boot_fail_reserved = 0;    /* 保留字段 (原防砖计数器) */
     cfg->user_app_size    = 0;
     cfg->user_app_crc32   = 0;
     cfg->user_app_version = 0;
@@ -807,43 +807,6 @@ esp_err_t iap_config_inc_boot_count(void)
     return iap_config_set(&cfg);
 }
 
-esp_err_t iap_config_inc_boot_fail(void)
-{
-    iap_cfg_data_t cfg;
-    esp_err_t err = iap_config_get(&cfg);
-    if (err != ESP_OK) {
-        return err;
-    }
-    /* 饱和处理: 避免溢出回绕后误判为"未失败" */
-    if (cfg.boot_fail_count < UINT16_MAX) {
-        cfg.boot_fail_count++;
-    }
-    return iap_config_set(&cfg);
-}
-
-esp_err_t iap_config_clear_boot_fail(void)
-{
-    iap_cfg_data_t cfg;
-    esp_err_t err = iap_config_get(&cfg);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (cfg.boot_fail_count == 0) {
-        return ESP_OK;      /* 已是 0, 无需写 flash */
-    }
-    cfg.boot_fail_count = 0;
-    return iap_config_set(&cfg);
-}
-
-uint16_t iap_config_get_boot_fail(void)
-{
-    iap_cfg_data_t cfg;
-    if (iap_config_get(&cfg) != ESP_OK) {
-        return 0;
-    }
-    return cfg.boot_fail_count;
-}
-
 esp_err_t iap_config_reset(void)
 {
     iap_cfg_data_t cfg;
@@ -1007,7 +970,7 @@ const char *iap_boot_reason_str(iap_boot_reason_t reason)
     case IAP_BOOT_REASON_DOWNLOAD_FLAG:  return "配置区下载位置位";
     case IAP_BOOT_REASON_WAIT_TIMEOUT:   return "等待超时无操作";
     case IAP_BOOT_REASON_USER_REQUEST:   return "用户程序请求";
-    case IAP_BOOT_REASON_CRC_FAILED:     return "用户程序 CRC 校验失败";
+    case IAP_BOOT_REASON_BOOT_FAIL:      return "启动用户程序失败";
     case IAP_BOOT_REASON_NO_VALID_APP:   return "用户程序区无有效程序";
     case IAP_BOOT_REASON_FIRST_BOOT:     return "首次上电";
     case IAP_BOOT_REASON_TRIG_GPIO:      return "GPIO 引脚电平触发";

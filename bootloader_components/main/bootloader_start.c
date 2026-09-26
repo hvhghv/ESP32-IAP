@@ -87,13 +87,6 @@
 /** IAP 程序区最大大小 (0x140000 - 0x10000 = 0x130000 = 1216KB) */
 #define IAP_APP_MAX_SIZE      0x130000
 
-/*
- * 防砖: 连续启动 APP 失败次数上限。
- *
- * 定义在 main/iap_boot_param.h (IAP 侧同样使用该常量判断
- * 「上一轮启动失败」并停止重试)，此处不再重复定义。
- */
-
 static const char *TAG = "boot";
 
 /* ============================================================================
@@ -173,23 +166,18 @@ void __attribute__((noreturn)) call_start_cpu0(void)
     if (iap_param_is_valid(p) && p->boot_target == IAP_BOOT_TARGET_APP) {
         /* --- 请求启动用户程序 --- */
 
-        /* 防砖: 连续启动失败次数超限则强制回 IAP */
-        bootloader_common_update_rtc_retain_mem(NULL, true);   /* reboot_counter++ */
-        uint16_t cnt = bootloader_common_get_rtc_retain_mem_reboot_counter();
-
-        if (cnt > IAP_BOOT_MAX_RETRY) {
-            ESP_LOGW(TAG, "启动计数超限 (%u > %d), 强制回 IAP",
-                     (unsigned)cnt, IAP_BOOT_MAX_RETRY);
-            /* 使参数失效 → 下次启动进 IAP */
-            p->boot_target = IAP_BOOT_TARGET_IAP;
-            p->crc32 = esp_rom_crc32_le(UINT32_MAX, (const uint8_t *)p,
-                                        offsetof(iap_boot_param_t, crc32));
-            bootloader_common_reset_rtc_retain_mem();
-        } else {
-            ESP_LOGI(TAG, "RTC RAM: 启动用户程序 @ 0x%08" PRIx32
-                     " (第 %u 次)", p->user_addr, (unsigned)(cnt + 1));
-            boot_from_addr(p->user_addr, p->user_size);
-        }
+        /*
+         * 直接按 RTC RAM 请求启动用户程序。
+         *
+         * 镜像合法性由 bootloader_utility_load_boot_image() 内部校验
+         * (magic / 段表 / SHA256 / chip_id)；校验失败时它会自动尝试
+         * 下一个启动项，最终回落到 IAP (factory)。
+         *
+         * 不做任何重试计数 —— 启动决策完全由 IAP 侧控制。
+         */
+        ESP_LOGI(TAG, "RTC RAM: 启动用户程序 @ 0x%08" PRIx32,
+                 p->user_addr);
+        boot_from_addr(p->user_addr, p->user_size);
     }
 
     /* --- 启动 IAP (冷启动 / 数据无效 / 强制回 IAP) --- */

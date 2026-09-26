@@ -128,18 +128,6 @@ extern "C" {
 /** 结构版本 (布局变更时递增, 用于未来迁移) */
 #define IAP_PARAM_VERSION   0x0001U
 
-/*
- * 防砖: 连续启动用户程序失败次数上限。
- *
- * bootloader 每次按 RTC RAM 启动用户程序前递增 reboot_counter；
- * 超过本上限后判定镜像不可启动，复位 RTC RAM 并回落 IAP。
- *
- * ⚠️ IAP 侧也必须使用同一常量: 它据此判断「上一轮启动失败」，
- *    从而停止再次尝试、停留在下载模式，避免无限重启循环。
- *    (见 main/main.c 的 6c 节)
- */
-#define IAP_BOOT_MAX_RETRY  5
-
 /** 启动目标 */
 #define IAP_BOOT_TARGET_IAP 0   /*!< 启动 IAP 程序 */
 #define IAP_BOOT_TARGET_APP 1   /*!< 启动用户程序 */

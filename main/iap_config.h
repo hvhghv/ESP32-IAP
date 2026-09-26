@@ -87,35 +87,6 @@ esp_err_t iap_config_set_boot_reason(iap_boot_reason_t reason);
 esp_err_t iap_config_inc_boot_count(void);
 
 /**
- * @brief 连续启动失败计数 +1
- *
- * IAP 在**准备启动用户程序前**调用。若用户程序成功运行，应调用
- * iap_config_clear_boot_fail() 清零；否则下次 IAP 启动时该值仍保留，
- * 累计超过 IAP_BOOT_MAX_RETRY 后 IAP 将停止尝试启动并停在下载模式，
- * 避免「启动失败 → 回落 IAP → 又启动」的无限重启循环。
- *
- * @return ESP_OK 成功
- */
-esp_err_t iap_config_inc_boot_fail(void);
-
-/**
- * @brief 清零连续启动失败计数
- *
- * 用户程序启动成功后调用 (表示本次启动成功)。
- * 也可由用户在终端执行 `app clearfail` 手动清零。
- *
- * @return ESP_OK 成功
- */
-esp_err_t iap_config_clear_boot_fail(void);
-
-/**
- * @brief 读取连续启动失败计数
- *
- * @return 当前计数
- */
-uint16_t iap_config_get_boot_fail(void);
-
-/**
  * @brief 恢复默认配置
  *
  * @return ESP_OK 成功

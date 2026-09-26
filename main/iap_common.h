@@ -375,23 +375,15 @@ typedef struct __attribute__((packed)) {
     /* --- 启动等待 --- */
     uint16_t wait_seconds;              /*!< 进入 IAP 后等待秒数，0 表示不等待 */
     /*
-     * 连续启动用户程序失败次数 (防砖计数器)。
+     * 保留字段 (原 boot_fail_count)。
      *
-     * 语义:
-     *   IAP 每次准备启动用户程序前 +1，并把它写回配置区。
-     *   若用户程序成功运行，它应调用 iap_config_clear_boot_fail()
-     *   清零 (可选；不调用则下次进 IAP 时由 IAP 判定)。
+     * 旧版用于「连续启动失败计数」防砖，现已移除 —— IAP 不再对用户程序
+     * 做任何启动重试限制，启动决策完全由配置区与 RTC RAM 控制。
      *
-     *   IAP 启动时若发现该值 > IAP_BOOT_MAX_RETRY，说明之前多次
-     *   尝试启动都失败 (bootloader 校验不通过而回落 IAP)，
-     *   此时**不再尝试启动**，直接停在下载模式，避免无限重启循环。
-     *
-     * 为什么不用 RTC RAM 的 reboot_counter:
-     *   bootloader 超限后会调用 bootloader_common_reset_rtc_retain_mem()
-     *   清零整个 RTC RAM (含 custom 区)，IAP 侧读到的计数恒为 0，
-     *   无法据此判断。配置区在 flash 中，不受 RTC RAM 复位影响。
+     * 保留 2 字节以维持 iap_cfg_data_t 的 612 字节布局不变，
+     * 避免破坏已烧录设备的配置区兼容性。
      */
-    uint16_t boot_fail_count;
+    uint16_t boot_fail_reserved;
 
     /* --- 用户程序信息 (由 IAP 或用户程序更新) --- */
     uint32_t user_app_size;             /*!< 用户程序镜像长度 (字节)，0 表示未知 */
@@ -492,7 +484,7 @@ typedef struct __attribute__((packed)) {
  * 编译期检查: 配置数据结构必须能放入配置槽。
  *
  * 布局 (总长 612 字节):
- *   flags(4) off=0, wait_seconds(2) off=4, boot_fail_count(2) off=6,
+ *   flags(4) off=0, wait_seconds(2) off=4, boot_fail_reserved(2) off=6,
  *   user_app_size(4) off=8, user_app_crc32(4) off=12, user_app_version(4) off=16,
  *   boot_count(4) off=20, last_boot_reason(4) off=24,
  *   i2c_scl_gpio(1) off=28, i2c_sda_gpio(1) off=29, i2c_addr(1) off=30,
@@ -543,7 +535,7 @@ typedef enum {
     IAP_BOOT_REASON_DOWNLOAD_FLAG,      /*!< 配置区下载位置位 */
     IAP_BOOT_REASON_WAIT_TIMEOUT,       /*!< 等待超时无操作 */
     IAP_BOOT_REASON_USER_REQUEST,       /*!< 用户程序主动请求进入 IAP */
-    IAP_BOOT_REASON_CRC_FAILED,         /*!< 用户程序 CRC 校验失败 */
+    IAP_BOOT_REASON_BOOT_FAIL,          /*!< 启动用户程序失败 (跳转未成功) */
     IAP_BOOT_REASON_NO_VALID_APP,       /*!< 用户程序区无有效程序 */
     IAP_BOOT_REASON_FIRST_BOOT,         /*!< 首次上电 */
     IAP_BOOT_REASON_TRIG_GPIO,          /*!< 等待期间 GPIO 引脚电平触发 */
